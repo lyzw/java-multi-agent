@@ -150,7 +150,7 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: <RobotOutlined />,
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description:
-          '跨租户 Agent 注册表：Agent 为全局实体，运营统一维护定义；租户通过 tenant_agent_binding 多对多绑定使用。定义走三步发布工作流，绑定走直接配置 CRUD。',
+          '跨租户 Agent 注册表：Agent 为全局实体，运营统一维护定义；租户通过 tenant_agent_binding 多对多绑定使用。定义按发布策略分流（直发 / 手动执行 / 双人复核），绑定走直接配置 CRUD。',
         phase: '能力目录',
       },
       {
@@ -160,7 +160,7 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: <ToolOutlined />,
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description:
-          '平台级 Tool 目录与三步发布工作流（申请→审批→执行）。登记/修改经 PlatformRegistrationModal，停用走生命周期申请。',
+          '平台级 Tool 目录，发布按策略分流（直发 / 手动执行 / 双人复核）。登记/修改经 PlatformRegistrationModal，停用走生命周期申请。',
         phase: '能力目录',
       },
       {
@@ -170,7 +170,7 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: <MergeCellsOutlined />,
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description:
-          '平台级 Skill 目录（含 Tool/MCP 闭包声明）与三步发布工作流。声明的对象取不到定义会被 400 拒（闭包自洽）。',
+          '平台级 Skill 目录（含 Tool/MCP 闭包声明），发布按策略分流。声明的对象取不到定义会被 400 拒（闭包自洽）。',
         phase: '能力目录',
       },
       {
@@ -180,7 +180,7 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: <PartitionOutlined />,
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description:
-          '平台级 MCP Server 目录与三步发布工作流。凭据定位符从不回显，重发必须显式重新填写（fail-closed）。',
+          '平台级 MCP Server 目录，发布按策略分流。凭据定位符从不回显，重发必须显式重新填写（fail-closed）。',
         phase: '能力目录',
       },
       {

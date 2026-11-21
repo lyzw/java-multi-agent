@@ -27,6 +27,8 @@ export interface PublishPolicyItem {
 }
 
 export interface PublishPolicyCreate {
+  /** 作用域：PLATFORM / TENANT；缺省由服务端按主体判定（TENANT）。 */
+  scope?: string
   policyLevel: PublishPolicyLevel
   resourceKind?: string
   resourceId?: string

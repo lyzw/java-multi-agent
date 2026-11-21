@@ -55,6 +55,7 @@ import { lifecycleTag, tagList, timeCell } from '@/pages/catalog/displayBits'
 import { AgentDraftPanel } from '@/pages/agents/AgentDraftPanel'
 import { CatalogDetailDrawer, AgentRegistryDetail } from './platformDetailDrawer'
 import { describeCatalogLoadError } from './platformRequestBits'
+import { describeSubmitResult } from '@/pages/publish/publishBits'
 import { emptyTextWhileLoading } from '@/shared/loadingState'
 import { scrollXOf } from '@/shared/tableLayout'
 
@@ -88,7 +89,7 @@ type AgentUniqRow = PlatformAgentRegistryItem & { boundTenants: string[] }
  *   <li>RLS 没有被绕过：写端点由运营显式传入 tenantId（可留空 = 全局 Agent），
  *       有租户时仓储层仍按 tenantId 绑定租户上下文 + 应用角色连接；留空则走
  *       PLATFORM 发布头 + 运维通道，授权沿用平台域 RESOURCE_ADMIN；</li>
- *   <li>三步工作流（申请 → 双人复核 → 执行）在页内申请队列闭环，与原实现保持一致；</li>
+ *   <li>发布流程按服务端策略分流（DIRECT 直发 / MANUAL 手动执行 / APPROVAL_* 双人复核），在页内申请队列闭环；</li>
  *   <li>新增 / 修改继续走 {@link AgentDraftPanel}（同租户侧一张草稿表单），
  *       注入平台链提交通道。</li>
  * </ul>
@@ -293,7 +294,8 @@ export function AgentRegistryPage(): JSX.Element {
           expectedPublishSeq: payload.expectedPublishSeq,
           agents: payload.agents ?? [],
         })
-        return { requestId: created.requestId }
+        // ⚠️ 把服务端流程状态交回表单：策略可能已自动放行，不能写死「待双人复核」。
+        return { requestId: created.requestId, state: created.state }
       },
     }),
     [editorTenantId],
@@ -308,14 +310,14 @@ export function AgentRegistryPage(): JSX.Element {
     }
     setDeprecating(true)
     try {
-      await submitPlatformAgentLifecycleRequest({
+      const created = await submitPlatformAgentLifecycleRequest({
         tenantId: deprecateTarget.tenantId,
         objectId: deprecateTarget.agentId,
         version,
         expectedFrom: deprecateTarget.lifecycleState ?? 'PUBLISHED',
         reason: deprecateReason.trim(),
       })
-      message.success('停用申请已提交，待双人复核后执行')
+      message.success(describeSubmitResult(created.state, created.requestId))
       setDeprecateTarget(null)
       setDeprecateReason('')
     } catch (e) {
@@ -684,7 +686,7 @@ export function AgentRegistryPage(): JSX.Element {
         showIcon
         style={{ marginBottom: 16 }}
         message="Agent 是全局智能体实体；运营统一维护定义与租户绑定关系"
-        description="本页以 Agent 身份为主视角聚合：每行 = 一个 Agent 的完整画像（绑定多少租户、用哪个模型、编排模式、能力清单）。新增 / 修改走同一张草稿表单（申请 → 双人复核 → 执行三步工作流）；「删除」= 停用（DEPRECATED 单向终态）。"
+        description="本页以 Agent 身份为主视角聚合：每行 = 一个 Agent 的完整画像（绑定多少租户、用哪个模型、编排模式、能力清单）。新增 / 修改走同一张草稿表单（流程按发布策略分流）；「删除」= 停用（DEPRECATED 单向终态）。"
       />
       {error && (
         <Alert type="error" showIcon style={{ marginBottom: 16 }} message="Agent 注册表不可用" description={error} />
@@ -852,7 +854,7 @@ export function AgentRegistryPage(): JSX.Element {
               message.success(
                 r.failed
                   ? 'Agent 行已创建，但发布申请提交失败（请到详情页重试）'
-                  : '申请已提交，待双人复核后执行',
+                  : describeSubmitResult(r.state, r.requestId ?? undefined),
               )
             }}
           />
@@ -874,7 +876,7 @@ export function AgentRegistryPage(): JSX.Element {
           showIcon
           style={{ marginBottom: 16 }}
           message="停用是不可逆的终态（DEPRECATED）"
-          description="已发布版本行不可变，停用走「申请 → 双人复核 → 执行」，执行后该 Agent 的当前版本进入 DEPRECATED，无法复活。"
+          description="已发布版本行不可变，停用同样按发布策略分流（APPROVAL_* 才需双人复核），执行后该 Agent 的当前版本进入 DEPRECATED，无法复活。"
         />
         <Form layout="vertical">
           <Form.Item label="变更理由" required>
@@ -890,7 +892,7 @@ export function AgentRegistryPage(): JSX.Element {
 
       {/* ── 申请队列：三步工作流闭环 ── */}
       <Drawer
-        title="Agent 变更申请队列（三步工作流）"
+        title="Agent 变更申请队列（按发布策略分流）"
         open={queueOpen}
         onClose={() => setQueueOpen(false)}
         width={1000}

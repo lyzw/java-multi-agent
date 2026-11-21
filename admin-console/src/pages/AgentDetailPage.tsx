@@ -25,6 +25,7 @@ import {
 import { AgentDependenciesTab } from './AgentDependenciesTab'
 import { DelegationTab } from './dependencies/DelegationTab'
 import { AgentDraftPanel } from './agents/AgentDraftPanel'
+import { describeSubmitResult } from '@/pages/publish/publishBits'
 import { AgentOverview } from './agents/AgentOverview'
 import { NEW_AGENT_SEGMENT } from './agents/agentDraftForm'
 import type { AgentDefinition, AgentItem, AgentVersion } from '@/api/types'
@@ -160,7 +161,7 @@ export function AgentDetailPage(): JSX.Element {
         },
         reason: values.reason.trim(),
       })
-      message.success(`停用申请已提交（${req.requestId.slice(0, 8)}…），待双人复核后执行`)
+      message.success(describeSubmitResult(req.state, req.requestId))
       deprecateForm.resetFields()
     } catch (e) {
       if (e instanceof ApiError && e.status === 400) {
@@ -313,8 +314,8 @@ export function AgentDetailPage(): JSX.Element {
                 <Alert
                   type="info"
                   showIcon
-                  message="日常变更请走「编辑」页签（三步工作流 · 双人复核）"
-                  description="本页是生命周期与运维通道：停用走「申请 → 双人复核 → 执行」。"
+                  message="日常变更请走「编辑」页签（按发布策略分流）"
+                  description="本页是生命周期与运维通道：停用同样按发布策略分流，APPROVAL_* 才需双人复核。"
                 />
 
                 {/* ── 停用（生命周期迁移，不是物理删除） ── */}
@@ -324,7 +325,7 @@ export function AgentDetailPage(): JSX.Element {
                     showIcon
                     style={{ marginBottom: 16 }}
                     message="停用 = 迁移到 DEPRECATED，不是物理删除"
-                    description="已发布行不可变（DB 触发器），物理删除会让引用它的对象变成悬空引用。停用走「申请 → 双人复核 → 执行」。"
+                    description="已发布行不可变（DB 触发器），物理删除会让引用它的对象变成悬空引用。停用按发布策略分流，执行后进入 DEPRECATED。"
                   />
                   {definitionUnavailable ? (
                     <Alert

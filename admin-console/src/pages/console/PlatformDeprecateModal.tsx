@@ -3,8 +3,8 @@
  *
  * <p>语义与租户链 detail 页的 {@code PlatformDeprecateCard} 一致：
  * <b>停用不是物理删除</b> —— 已发布行不可变（DB 触发器），正确语义是
- * 迁移到 {@code DEPRECATED}（单向终态），且仍走
- * 「申请 → 审批 → 执行」三步工作流（PLATFORM_ADMIN 闸门）。
+ * 迁移到 {@code DEPRECATED}（单向终态），流程按发布策略分流
+ * （PLATFORM_ADMIN 闸门；APPROVAL_* 才需双人复核）。
  */
 
 import { useEffect, useState } from 'react'
@@ -12,6 +12,7 @@ import { App as AntApp, Form, Input, Modal } from 'antd'
 import { submitPlatformLifecycleRequest } from '@/api/adminApi'
 import type { PlatformRequestItem } from '@/api/types'
 import { describePlatformError } from '@/pages/catalog/PlatformPublishPanel'
+import { describeSubmitResult } from '@/pages/publish/publishBits'
 
 /** 本页聚焦的三类对象（平台通道只管这三类）。 */
 export type PlatformObjectType = 'tool' | 'skill' | 'mcp_server'
@@ -73,7 +74,7 @@ export function PlatformDeprecateModal({
         to: 'DEPRECATED',
         reason: values.reason.trim(),
       })
-      message.success('停用申请已提交，等待审批与执行')
+      message.success(describeSubmitResult(req.state, req.requestId))
       form.resetFields()
       onSubmitted?.(req)
       onClose()

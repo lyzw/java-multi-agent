@@ -1,7 +1,7 @@
 /**
  * 平台能力目录四页**共享小组件**（平台链 /api/platform/v1/capabilities/*）。
  *
- * <p>包含：申请队列抽屉（三步工作流的审批/执行入口）、生命周期分组 Tabs、
+ * <p>包含：申请队列抽屉（按流程状态提供审批/执行入口）、生命周期分组 Tabs、
  * 目录页加载错误提示。Tool / Skill / MCP 三页共用，避免三处各自漂移。
  */
 
@@ -11,7 +11,6 @@ import {
   Button,
   Drawer,
   Popconfirm,
-  Space,
   Table,
   Tabs,
   Tag,
@@ -140,11 +139,13 @@ function reqTime(v: string | undefined): ReactNode {
 /**
  * 申请队列按钮 + 抽屉（页头「申请队列」）。
  *
- * <p>⚠️ **只对 PENDING 行放「通过」「执行」**：审批与执行是三步工作流里
- * 两步，且必须**由不同的人**完成（后端双人复核比对 id）；APPROVED 行
- * 只放「执行」，REJECTED / APPLIED / FAILED 行不可再操作。为简化目录页
- * 职责，这里对 PENDING 给通过 + 执行两个 Popconfirm 按钮（执行会被
- * 后端 409 拦下 —— 自审批防护）。
+ * <p>⚠️ **按服务端返回的流程状态放操作**：
+ * <ul>
+ *   <li>PENDING（APPROVAL_*）：只放「通过」/「驳回」，双人复核仍由后端比对 id；</li>
+ *   <li>APPROVED（MANUAL 自动放行，或人工审批完成）：只放「执行」；</li>
+ *   <li>APPLIED（DIRECT 直发）/ REJECTED / FAILED：不可再操作。</li>
+ * </ul>
+ * 没有 APPROVED 的「执行」入口，MANUAL 模式的变更就永远停在已批准状态。
  */
 export function PlatformRequestQueueButton(): JSX.Element {
   const { message } = AntApp.useApp()
@@ -226,21 +227,20 @@ export function PlatformRequestQueueButton(): JSX.Element {
       fixed: 'right',
       render: (_: unknown, r: PlatformRequestItem) =>
         r.state === 'PENDING' ? (
-          <Space size="small">
-            <Popconfirm
-              title="确认通过该申请？（双人复核不在此处）"
-              onConfirm={() => void act(r, 'approve')}
-            >
-              <Button size="small" loading={acting === `${r.requestId}:approve`}>
-                通过
-              </Button>
-            </Popconfirm>
-            <Popconfirm title="确认执行该申请？（此步才真正写入）" onConfirm={() => void act(r, 'apply')}>
-              <Button size="small" type="primary" loading={acting === `${r.requestId}:apply`}>
-                执行
-              </Button>
-            </Popconfirm>
-          </Space>
+          <Popconfirm
+            title="确认通过该申请？（审批人不得等于申请人）"
+            onConfirm={() => void act(r, 'approve')}
+          >
+            <Button size="small" loading={acting === `${r.requestId}:approve`}>
+              通过
+            </Button>
+          </Popconfirm>
+        ) : r.state === 'APPROVED' ? (
+          <Popconfirm title="确认执行该申请？（此步才真正写入）" onConfirm={() => void act(r, 'apply')}>
+            <Button size="small" type="primary" loading={acting === `${r.requestId}:apply`}>
+              执行
+            </Button>
+          </Popconfirm>
         ) : (
           <Typography.Text type="secondary">-</Typography.Text>
         ),

@@ -48,8 +48,13 @@ export function PolicyConfigPage(): JSX.Element {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await listPublishPolicies()
-      setRows(data)
+      // ⚠️ 能力目录横跨 PLATFORM / TENANT 两条发布通道：两侧策略都要展示，
+      // 否则平台通道配的策略在页面上「看不见」，用户会以为策略没生效。
+      const [platform, tenant] = await Promise.all([
+        listPublishPolicies('PLATFORM'),
+        listPublishPolicies('TENANT'),
+      ])
+      setRows([...platform, ...tenant])
     } finally {
       setLoading(false)
     }
@@ -60,13 +65,14 @@ export function PolicyConfigPage(): JSX.Element {
   const handleCreate = () => {
     setEditing(null)
     form.resetFields()
-    form.setFieldsValue({ policyLevel: 'GLOBAL', publishMode: 'MANUAL', enabled: true })
+    form.setFieldsValue({ scope: 'PLATFORM', policyLevel: 'GLOBAL', publishMode: 'MANUAL', enabled: true })
     setOpen(true)
   }
 
   const handleEdit = (row: PublishPolicyItem) => {
     setEditing(row)
     form.setFieldsValue({
+      scope: row.scope,
       policyLevel: row.policyLevel,
       resourceKind: row.resourceKind,
       resourceId: row.resourceId,
@@ -96,7 +102,7 @@ export function PolicyConfigPage(): JSX.Element {
 
   const handleDelete = async (row: PublishPolicyItem) => {
     try {
-      await deletePublishPolicy(row.policyId)
+      await deletePublishPolicy(row.policyId, row.scope)
       message.success('策略已删除')
       await load()
     } catch (e) {
@@ -109,6 +115,10 @@ export function PolicyConfigPage(): JSX.Element {
   const watchLevel = Form.useWatch('policyLevel', form) as PublishPolicyLevel | undefined
 
   const columns = useMemo(() => ([
+    {
+      title: '作用域', dataIndex: 'scope', width: 110,
+      render: (v: string) => v === 'PLATFORM' ? <Tag color="geekblue">平台</Tag> : <Tag>租户</Tag>,
+    },
     {
       title: '层级', dataIndex: 'policyLevel', width: 120,
       render: (v: PublishPolicyLevel) => {
@@ -177,6 +187,14 @@ export function PolicyConfigPage(): JSX.Element {
         width={560}
       >
         <Form form={form} layout="vertical" preserve={false}>
+          <Form.Item label="作用域" name="scope" rules={[{ required: true }]}
+            extra="平台 = Tool / Skill / MCP / 全局 Agent；租户 = Agent / 输出契约 / 路由策略">
+            <Select options={[
+              { value: 'PLATFORM', label: 'PLATFORM（平台能力目录）' },
+              { value: 'TENANT', label: 'TENANT（租户能力）' },
+            ]} />
+          </Form.Item>
+
           <Form.Item label="策略层级" name="policyLevel" rules={[{ required: true }]}>
             <Select options={[
               { value: 'GLOBAL', label: 'GLOBAL（全局默认）' },

@@ -20,6 +20,7 @@ import {
   submitPlatformPublishRequest,
 } from '@/api/adminApi'
 import type { PlatformPublishRequest, PlatformRequestItem } from '@/api/types'
+import { describeSubmitResult } from '@/pages/publish/publishBits'
 
 /**
  * 把平台级通道的错误翻译成**可区分**的提示。
@@ -64,18 +65,21 @@ export interface PlatformPublishPanelProps<TValues> {
 }
 
 /**
- * 平台级发布三步工作流（申请 → 审批 → 执行）。
+ * 平台级发布工作流（申请 → 按策略分流 → 按需审批 → 执行）。
  *
- * <p><b>⚠️ 三步不可合并</b>：把申请人与审批人两个 id 放进一次请求由调用方填写，
- * 双人复核就退化成「调用方自己声明另一个人同意了」。平台级对象影响**全平台**，
- * 比租户级更需要复核。
+ * <p><b>⚠️ 流程由服务端按发布策略决定，前端不做判定</b>：
+ * <ul>
+ *   <li>APPROVAL_MANUAL / APPROVAL_AUTO → 停在 PENDING 等真人双人复核；</li>
+ *   <li>MANUAL → 服务端自动放行到 APPROVED，等人工点「执行」；</li>
+ *   <li>DIRECT → 服务端自动放行并立即执行（APPLIED）。</li>
+ * </ul>
+ * 前端只按返回的流程状态渲染对应操作，不再写死「待双人复核」。
  *
- * <p><b>⚠️ 审批与执行是两步，且不是同一个人</b>：本页把三步并列呈现，
- * 是为了让「我批了」与「配置真的变了」在界面上可区分 ——
- * 审批通过（APPROVED）时配置**尚未**改变。
+ * <p><b>⚠️ 审批与执行分两步</b>：APPROVED 时配置**尚未**改变，
+ * 让「放行了」与「配置真的变了」在界面上可区分。
  *
  * <p><b>⚠️ 平台级申请单不在租户发布队列里</b>（那是 {@code /api/cap/config/publishes}），
- * 故本页自带三步闭环，不跳转到发布中心。
+ * 故本页自带闭环，不跳转到发布中心。
  */
 export function PlatformPublishPanel<TValues>({
   form,
@@ -120,7 +124,7 @@ export function PlatformPublishPanel<TValues>({
     try {
       const created = await submitPlatformPublishRequest(body)
       setRequest(created)
-      message.success(`申请已提交（${created.requestId.slice(0, 8)}…），待审批后执行`)
+      message.success(describeSubmitResult(created.state, created.requestId))
     } catch (e) {
       message.error(describePlatformError(e))
     } finally {
@@ -165,10 +169,10 @@ export function PlatformPublishPanel<TValues>({
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="申请 → 审批 → 执行（三步不可合并）"
+        message="按发布策略分流：免审直发 / 手动发布 / 双人复核"
         description={
-          '提交只生成申请单，不写配置表；审批人不得等于申请人；执行才真正写入平台配置。' +
-          '平台级对象影响全平台，变更需 PLATFORM_ADMIN 身份。'
+          '提交后由服务端按当前生效的发布策略决定流程：DIRECT 直接生效，MANUAL 免审批但需人工执行，' +
+          'APPROVAL_* 才走双人复核。执行才真正写入平台配置，变更需 PLATFORM_ADMIN 身份。'
         }
       />
       {/* ⚠️ 刻意给 Form 命名：antd 用 `name` 给字段 id 加前缀。
@@ -204,7 +208,9 @@ export function PlatformPublishPanel<TValues>({
               request.state === 'APPLIED'
                 ? '执行完成，平台配置已改变。'
                 : request.state === 'APPROVED'
-                  ? '审批已通过，但配置尚未改变 —— 需第三步「执行」才写入。'
+                  ? (request.decisionNote?.startsWith('发布策略自动放行')
+                      ? '已按发布策略免审批放行（非人工复核），但配置尚未改变 —— 需点击「执行」才写入。'
+                      : '审批已通过，但配置尚未改变 —— 需点击「执行」才写入。')
                   : request.state === 'REJECTED'
                     ? '申请已被驳回（终态）。'
                     : request.state === 'FAILED'

@@ -207,8 +207,8 @@ export function PublishReleasesPage(): JSX.Element {
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message="回滚同样需要双人复核"
-          description="本页只提交申请；审批与执行在发布中心完成。回滚仅改变配置指针，不恢复已撤销授权、不删除历史记录。"
+          message="回滚按发布策略分流"
+          description="本页只提交申请；APPROVAL_* 需双人复核、MANUAL 需人工执行、DIRECT 直接生效。回滚仅改变配置指针，不恢复已撤销授权、不删除历史记录。"
         />
         <Form layout="vertical">
           <Form.Item label="变更理由" required>

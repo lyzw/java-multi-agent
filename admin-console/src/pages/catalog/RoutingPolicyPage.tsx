@@ -21,6 +21,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { ExperimentOutlined, SendOutlined } from '@ant-design/icons'
 import { ApiError } from '@/api/client'
 import { submitPublishRequest } from '@/api/adminApi'
+import { describeSubmitResult } from '@/pages/publish/publishBits'
 import {
   dryRunRoutingPolicy,
   isFailureResolution,
@@ -223,7 +224,7 @@ export function RoutingPolicyPage(): JSX.Element {
         routingPolicies: [spec],
         reason,
       })
-      message.success('策略登记申请已提交，待双人复核后执行')
+      message.success(describeSubmitResult(req.state, req.requestId))
       setRequestId(req.requestId)
       form.resetFields()
       setVisual(makeDefaultDraft())
@@ -401,7 +402,7 @@ export function RoutingPolicyPage(): JSX.Element {
               <Card title="⑥ 校验并提交登记申请" size="small">
                 <Paragraph type="secondary">
                   右侧会实时显示结构校验与最终 JSON。试跑只是<b>看结论</b>；
-                  登记策略仍要走三步工作流，「我批了」与「配置真的变了」必须可区分。
+                  登记策略按发布策略分流；「放行了」与「配置真的变了」必须可区分。
                 </Paragraph>
                 <Form.Item
                   name="reason"

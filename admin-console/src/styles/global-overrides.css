@@ -1,0 +1,169 @@
+/* ============================================================
+   全站视觉统一层（global-overrides.css）
+   ------------------------------------------------------------
+   目标：在**不改动任何页面 JSX / 业务逻辑 / 数据结构**的前提下，
+   让 90+ 个未挂 dc- 类的 AntD 页面共享「控制面」的排版节奏、
+   色彩语义、留白对齐与交互反馈。
+
+   策略：
+   1) 只命中 .ant-* 结构类与 [style*=rgb] 属性——不依赖页面加 class；
+   2) 内联样式优先级最高，故纠偏处用 !important，且只在必要时；
+   3) 语义色纠偏保留「健康/严重/警告」含义，仅把 AntD 默认色板
+      映射到主题 teal/red/brass，绝不把有信息的颜色抹成同一种；
+   4) 不覆盖 .dc-*（Dashboard/外壳已自成体系）与 .row-selected 契约。
+   ============================================================ */
+
+/* ---------- 1. 排版统一：标题 / 文本层级 ---------- */
+h1.ant-typography,
+h2.ant-typography,
+h3.ant-typography,
+h4.ant-typography,
+h5.ant-typography {
+  color: var(--dc-text);
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+h3.ant-typography {
+  font-size: 20px;
+  font-weight: 600;
+}
+h4.ant-typography {
+  font-size: 17px;
+  font-weight: 600;
+}
+h5.ant-typography {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Card 头标题全站统一字重/字色，拉齐 RoleMatrix/Users/Model 等页。 */
+.ant-card-head-title {
+  font-weight: 600;
+  color: var(--dc-ink);
+}
+.ant-card-extra {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- 2. 色彩语义纠偏：把散落的内联 AntD 默认色板映射到主题 ----------
+   浏览器把 style={{color:'#389e0d'}} 序列化为 rgb(56, 158, 13)。
+   绿=健康→teal，红=严重→red，橙/金=警告→brass，蓝/紫=中性→ink。
+   仅作用于内联色节点，不触碰主题 token 已控制的 AntD 组件。            */
+
+/* 健康绿系 → teal */
+[style*="rgb(56, 158, 13)"],
+[style*="rgb(63, 134, 0)"],
+[style*="rgb(82, 196, 26)"],
+[style*="rgb(8, 151, 156)"] {
+  color: var(--dc-teal) !important;
+}
+/* 严重红系 → red */
+[style*="rgb(207, 19, 34)"],
+[style*="rgb(245, 34, 45)"] {
+  color: var(--dc-red) !important;
+}
+/* 警告橙/金系 → brass */
+[style*="rgb(212, 107, 8)"],
+[style*="rgb(250, 173, 20)"],
+[style*="rgb(212, 136, 6)"] {
+  color: var(--dc-brass-deep) !important;
+}
+/* 默认蓝/紫（AntD blue、geekblue）→ ink，消除与黄铜主色的冲突 */
+[style*="rgb(22, 119, 255)"],
+[style*="rgb(47, 84, 235)"] {
+  color: var(--dc-ink-2) !important;
+}
+
+/* 统计卡彩色底 → 主题浅底（仍按语义区分：健康/严重/警告/中性） */
+[style*="background: rgb(246, 255, 237)"],
+[style*="background: rgb(230, 255, 251)"] {
+  background: var(--dc-teal-soft) !important;
+}
+[style*="background: rgb(255, 241, 240)"] {
+  background: var(--dc-red-soft) !important;
+}
+[style*="background: rgb(255, 247, 230)"],
+[style*="background: rgb(255, 251, 230)"] {
+  background: var(--dc-brass-soft) !important;
+}
+/* 蓝/紫/灰底统一为冷灰白台面或极浅黄铜，避免五种浅底并存的杂乱 */
+[style*="background: rgb(240, 245, 255)"],
+[style*="background: rgb(249, 240, 255)"],
+[style*="background: rgb(230, 244, 255)"],
+[style*="background: rgb(250, 250, 250)"],
+[style*="background: rgb(245, 245, 245)"],
+[style*="background: rgb(240, 240, 240)"] {
+  background: var(--dc-paper) !important;
+}
+
+/* ---------- 3. 表格：表头 / 分页 / 操作列 ---------- */
+.ant-table-thead > tr > th {
+  font-weight: 600;
+  color: var(--dc-text-2);
+  font-size: 12.5px;
+}
+/* 分页条与表格呼吸节奏统一 */
+.ant-table-wrapper .ant-pagination {
+  margin: 16px 0 0 !important;
+}
+/* 操作列链接按钮间距归一，避免各页 Space size 不一 */
+.ant-table-cell .ant-btn-link {
+  padding-inline: 0;
+  margin-inline-end: 12px;
+}
+.ant-table-cell .ant-btn-link:last-child {
+  margin-inline-end: 0;
+}
+
+/* ---------- 4. Tag / Badge 圆角与字重 ---------- */
+.ant-tag {
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+/* ---------- 5. 交互反馈：键盘焦点与轻量过渡 ---------- */
+.ant-btn:focus-visible,
+.ant-select-selector:focus-visible,
+.ant-input:focus-visible,
+.ant-input-affix-wrapper:focus-visible,
+.ant-tabs-tab:focus-visible {
+  outline: 2px solid var(--dc-brass) !important;
+  outline-offset: 1px;
+}
+/* 卡片式可点元素给一点抬升反馈；不改静态卡片，避免整页浮动 */
+.ant-card-hoverable {
+  transition: border-color 0.16s ease, box-shadow 0.16s ease !important;
+}
+.ant-card-hoverable:hover {
+  border-color: var(--dc-brass) !important;
+}
+
+/* ---------- 6. 响应式兜底：窄屏让栅格堆叠、抽屉不溢出 ---------- */
+@media (max-width: 767px) {
+  /* 仅压平「卡片 body 下的直接栅格行」，不误伤按钮内的小 Space */
+  .ant-card-body > .ant-row > .ant-col {
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+  }
+  .ant-drawer-content-wrapper {
+    max-width: 100vw !important;
+  }
+  .ant-table {
+    font-size: 12px;
+  }
+  .ant-card-body {
+    padding: 12px !important;
+  }
+}
+
+/* ---------- 7. 可读性：统一链接与次要文本 ---------- */
+.ant-typography a,
+.ant-table-cell a {
+  color: var(--dc-brass-deep);
+}
+.ant-typography a:hover,
+.ant-table-cell a:hover {
+  color: var(--dc-brass);
+}

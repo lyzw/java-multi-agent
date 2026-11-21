@@ -17,8 +17,9 @@ import {
 import { SendOutlined } from '@ant-design/icons'
 import { ApiError } from '@/api/client'
 import { createAgent, submitPublishRequest } from '@/api/adminApi'
-import type { SubmitPublishRequest } from '@/api/types'
+import type { SubmitPublishRequest, PublishRequestItem } from '@/api/types'
 import type { AgentDefinition } from '@/api/types'
+import { describeSubmitResult } from '@/pages/publish/publishBits'
 import {
   evaluatePublishGate,
   FAILURE_POLICIES,
@@ -66,6 +67,8 @@ export interface AgentDraftSubmitResult {
   created: boolean
   /** 申请是否提交失败（登记模式下 Agent 行已建、申请未提交） */
   failed: boolean
+  /** 服务端返回的流程状态：决定是双人复核、手动执行还是已直发生效 */
+  state?: PublishRequestItem['state']
 }
 
 export interface AgentDraftPanelProps {
@@ -93,7 +96,9 @@ export interface AgentDraftPanelProps {
    */
   submitApi?: {
     createAgent: (input: { name: string; description?: string | null }) => Promise<{ agentId: string }>
-    submitPublishRequest: (payload: SubmitPublishRequest) => Promise<{ requestId: string }>
+    submitPublishRequest: (
+      payload: SubmitPublishRequest,
+    ) => Promise<{ requestId: string; state?: PublishRequestItem['state'] }>
   }
   /** 提交结束（成功或失败）后的回调 */
   onSubmitted?: (result: AgentDraftSubmitResult) => void
@@ -259,12 +264,13 @@ export function AgentDraftPanel({
         agents: [{ agentId: targetAgentId, ...normalized.draft }],
         reason,
       })
-      message.success(`申请已提交（${req.requestId.slice(0, 8)}…），待双人复核后执行`)
+      message.success(describeSubmitResult(req.state, req.requestId))
       onSubmitted?.({
         requestId: req.requestId,
         agentId: targetAgentId,
         created: registration,
         failed: false,
+        state: req.state,
       })
     } catch (e) {
       if (createdAgentId) {
@@ -294,19 +300,20 @@ export function AgentDraftPanel({
 
   return (
     <Card
-      title={registration ? '新建 Agent（全字段草稿）' : '修改 Agent（发新版本 · 三步工作流）'}
-      extra={<Tag color="blue">申请 → 双人复核 → 执行</Tag>}
+      title={registration ? '新建 Agent（全字段草稿）' : '修改 Agent（发新版本 · 按策略分流）'}
+      extra={<Tag color="blue">按发布策略：直发 / 手动发布 / 双人复核</Tag>}
     >
       <Alert
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="提交只生成申请单（不写配置表）"
+        message="提交只生成申请单，流程由服务端按发布策略决定"
         description={
-          registration
-            ? '新建 Agent 分两步：先创建 Agent 行（拿到标识），再提交多级定义的发布申请。' +
-              '申请通过双人复核并执行后，该 Agent 的关系字段（角色 / 技能 / 编排）才真正生效。'
-            : '已发布版本行不可变，改配置只能发一个新版本。审批人不得等于申请人；执行才真正生效。'
+          'DIRECT 免审直发；MANUAL 免审批但需人工执行；APPROVAL_* 才走双人复核。' +
+          (registration
+            ? ' 新建 Agent 分两步：先创建 Agent 行（拿到标识），再提交多级定义的发布申请。'
+            : ' 已发布版本行不可变，改配置只能发一个新版本。') +
+          ' 执行才真正写入配置，关系字段（角色 / 技能 / 编排）此时才生效。'
         }
       />
 

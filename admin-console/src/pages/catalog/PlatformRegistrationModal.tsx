@@ -13,11 +13,11 @@ import { PlatformPublishPanel } from './PlatformPublishPanel'
  * 弹窗让「登记」留在目录页上下文里：左边看着目录、右边填表单，
  * 提交完目录还在原地。
  *
- * <p><b>⚠️ 三步工作流不能被弹窗吞掉</b>：
+ * <p><b>⚠️ 发布流程不能被弹窗吞掉</b>：
  * 弹窗里放的是<b>完整的</b> {@link PlatformPublishPanel} ——
- * 申请 → 审批 → 执行三步都在弹窗内闭环。
- * 若弹窗只做「申请」而把审批/执行挪走，作者会以为「提交了就已经生效」，
- * 而实际上配置**一个字都没变**。
+ * 申请 → 按策略分流 → 按需审批 → 执行都在弹窗内闭环。
+ * 若弹窗只做「申请」而把后续步骤挪走，作者会以为「提交了就已经生效」，
+ * 而实际上配置**一个字都没变**（MANUAL 还停在 APPROVED）。
  *
  * <p><b>⚠️ 字段只有一份</b>：弹窗与详情页都渲染同一套字段组件，
  * 登记与修改**不会**漂移。
@@ -93,7 +93,7 @@ export function PlatformRegistrationModal<TValues>({
       <PlatformPublishPanel<TValues>
         form={form}
         buildRequest={buildRequest}
-        title="申请 → 审批 → 执行（三步不可合并）"
+        title="按发布策略分流：直发 / 手动执行 / 双人复核"
         submitText="提交登记申请"
         renderFields={renderFields}
       />

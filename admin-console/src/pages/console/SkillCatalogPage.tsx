@@ -236,7 +236,7 @@ export function SkillCatalogPage(): JSX.Element {
         showIcon
         style={{ marginBottom: 16 }}
         message="平台级 Skill 目录（/api/platform/v1/capabilities/*）"
-        description="Skill 定义是平台级对象，其声明的工具 / MCP 关系与风险上限在下方呈现。登记 / 改版 / 停用走平台级三步工作流（申请 → 审批 → 执行，需 PLATFORM_ADMIN）。双击行（或点「详情」）可只读查看全字段与声明关系——抽屉，不离开列表。"
+        description="Skill 定义是平台级对象，其声明的工具 / MCP 关系与风险上限在下方呈现。登记 / 改版 / 停用按发布策略分流（DIRECT 直发 / MANUAL 手动执行 / APPROVAL_* 双人复核，需 PLATFORM_ADMIN）。双击行（或点「详情」）可只读查看全字段与声明关系——抽屉，不离开列表。"
       />
       {error && (
         <Alert

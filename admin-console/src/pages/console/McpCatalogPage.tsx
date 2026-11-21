@@ -192,7 +192,7 @@ export function McpCatalogPage(): JSX.Element {
         showIcon
         style={{ marginBottom: 16 }}
         message="平台级 MCP Server 目录（/api/platform/v1/capabilities/*）"
-        description="MCP Server 是平台级对象。登记 / 改版 / 停用走平台级三步工作流（申请 → 审批 → 执行，需 PLATFORM_ADMIN）。凭据仅存定位符，本目录不回显任何凭据定位符或凭据材料。双击行（或点「详情」）可只读查看全字段与登记关系——抽屉，不离开列表。"
+        description="MCP Server 是平台级对象。登记 / 改版 / 停用按发布策略分流（DIRECT 直发 / MANUAL 手动执行 / APPROVAL_* 双人复核，需 PLATFORM_ADMIN）。凭据仅存定位符，本目录不回显任何凭据定位符或凭据材料。双击行（或点「详情」）可只读查看全字段与登记关系——抽屉，不离开列表。"
       />
       {error && (
         <Alert
