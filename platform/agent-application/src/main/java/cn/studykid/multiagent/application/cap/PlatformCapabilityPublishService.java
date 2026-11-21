@@ -30,7 +30,9 @@ import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
 import cn.studykid.multiagent.core.cap.SkillDescription;
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.McpTrustTier;
+import cn.studykid.multiagent.core.cap.PublishPolicy.PublishMode;
 import cn.studykid.multiagent.core.cap.ReasonCode;
+import cn.studykid.multiagent.application.cap.PublishPolicyService.ResourceRef;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
 import cn.studykid.multiagent.ports.persistence.CapSkillDefPort;
@@ -94,6 +96,9 @@ public class PlatformCapabilityPublishService {
     /** 全局 Agent 定义端口；仅 {@code requestPublishAgents} 使用，未装配时该方法 fail-closed。 */
     private final @Nullable CapAgentDefPort agentDefs;
 
+    /** 发布策略服务；为 null 时沿用旧的「一律等人工审批」行为（仅单测构造使用）。 */
+    private final @Nullable PublishPolicyService policies;
+
     /**
      * @param session    平台运维会话（提供受守卫的运维连接窗口）
      * @param requests   申请单仓储（<b>必须</b>用平台运维连接实现 ——
@@ -135,6 +140,26 @@ public class PlatformCapabilityPublishService {
                                             @NonNull ConfigPointerPort pointers,
                                             @NonNull Clock clock,
                                             @Nullable CapAgentDefPort agentDefs) {
+        this(session, requests, publisher, lifecycle, toolDefs, skillDefs, serverDefs,
+                pointers, clock, agentDefs, null);
+    }
+
+    /**
+     * 全参构造（含发布策略分流）：生产装配使用。
+     *
+     * <p>策略服务为 {@code null} 时沿用旧行为（等人工审批）—— 仅既有状态机单测使用该路径。
+     */
+    public PlatformCapabilityPublishService(@NonNull PlatformOpsSessionPort session,
+                                            @NonNull ConfigPublishRequestPort requests,
+                                            @NonNull ConfigPublishService publisher,
+                                            @NonNull ConfigLifecycleService lifecycle,
+                                            @NonNull CapToolDefPort toolDefs,
+                                            @NonNull CapSkillDefPort skillDefs,
+                                            @NonNull CapMcpServerDefPort serverDefs,
+                                            @NonNull ConfigPointerPort pointers,
+                                            @NonNull Clock clock,
+                                            @Nullable CapAgentDefPort agentDefs,
+                                            @Nullable PublishPolicyService policies) {
         this.session = session;
         this.requests = requests;
         this.publisher = publisher;
@@ -145,6 +170,7 @@ public class PlatformCapabilityPublishService {
         this.pointers = pointers;
         this.clock = clock;
         this.agentDefs = agentDefs;
+        this.policies = policies;
     }
 
     // ── 第一步：申请 ───────────────────────────────────────────────
@@ -175,7 +201,7 @@ public class PlatformCapabilityPublishService {
         // ⚠️ 申请阶段就跑一次门禁预检：非法方案在**申请时**就该被拒，
         //    而不是先占住一个审批名额，等审批通过后执行才失败。
         publisher.validateForReview(buildCommand(payload, requesterId, "system", false));
-        return insert(payload, reason, requesterId);
+        return autoRoute(insert(payload, reason, requesterId), refsOf(payload), requesterId);
     }
 
     /**
@@ -207,7 +233,7 @@ public class PlatformCapabilityPublishService {
                 ConfigPublishPayload.publishPlatformAgents(agents, expectedPublishSeq);
         // 申请期就跑门禁预检（形状 / 引用），非法方案在申请时即拒，不占审批名额。
         publisher.validateForReview(buildAgentCommand(payload, requesterId, "system", false));
-        return insert(payload, reason, requesterId);
+        return autoRoute(insert(payload, reason, requesterId), refsOf(payload), requesterId);
     }
 
     /**
@@ -224,7 +250,7 @@ public class PlatformCapabilityPublishService {
             @NonNull String requesterId) {
         requirePlatformObjectType(spec.type());
         ConfigPublishPayload payload = ConfigPublishPayload.lifecycle(spec);
-        return insert(payload, reason, requesterId);
+        return autoRoute(insert(payload, reason, requesterId), refsOf(payload), requesterId);
     }
 
     // ── 第二步：审批 ───────────────────────────────────────────────
@@ -242,8 +268,20 @@ public class PlatformCapabilityPublishService {
                                                 ConfigPublishRequestPort.@NonNull Decision decision,
                                                 @Nullable String note,
                                                 @NonNull String approverId) {
-        return session.inPlatformScopeSession(
+        ConfigPublishRequest updated = session.inPlatformScopeSession(
                 () -> requests.decide(null, requestId, decision, note, approverId));
+        // APPROVAL_AUTO：人工审批通过后自动执行。
+        if (policies == null || decision != ConfigPublishRequestPort.Decision.APPROVE
+                || updated.state() != ConfigPublishRequest.State.APPROVED) {
+            return updated;
+        }
+        ConfigPublishPayload payload = ConfigPublishPayload.fromJson(updated.payload());
+        PublishMode mode = policies.resolveForResources("PLATFORM", null, refsOf(payload));
+        if (mode == PublishMode.APPROVAL_AUTO) {
+            log.info("策略 APPROVAL_AUTO：平台申请 {} 审批通过，自动执行", requestId);
+            return apply(requestId, approverId);
+        }
+        return updated;
     }
 
     // ── 第三步：执行 ───────────────────────────────────────────────
@@ -340,6 +378,51 @@ public class PlatformCapabilityPublishService {
         }
         return session.inPlatformScopeSession(() -> requests.insert(
                 null, payload.operation(), payload.toJson(), reason, requesterId));
+    }
+
+    /**
+     * 平台申请后的按策略分流（服务端强制，PLATFORM 作用域）。
+     *
+     * <p>APPROVAL_* → 停在 PENDING 等真人双人复核；MANUAL → 系统自动放行到 APPROVED、
+     * 等人工点「执行」；DIRECT → 自动放行并立即执行。自动放行写入固定系统主体，
+     * 既满足「审批人 ≠ 申请人」，又在审计上与真人复核区分。
+     */
+    private ConfigPublishRequest autoRoute(ConfigPublishRequest created,
+                                           List<ResourceRef> refs, String requesterId) {
+        if (policies == null) return created;
+        PublishMode mode = policies.resolveForResources("PLATFORM", null, refs);
+        log.info("平台申请 {} 按发布策略 {} 自动分流", created.requestId(), mode);
+        if (mode.requiresApproval()) return created;
+        ConfigPublishRequest approved = session.inPlatformScopeSession(() -> requests.decide(
+                null, created.requestId(), ConfigPublishRequestPort.Decision.APPROVE,
+                PublishPolicyService.POLICY_AUTO_NOTE_PREFIX + mode.name(),
+                PublishPolicyService.POLICY_AUTO_APPROVER));
+        return mode.autoPublishOnApproval()
+                ? apply(created.requestId(), requesterId)
+                : approved;
+    }
+
+    /** 从载荷提取参与分流判定的资源引用；空集合回退到 GLOBAL 策略。 */
+    private static List<ResourceRef> refsOf(ConfigPublishPayload payload) {
+        List<ResourceRef> refs = new ArrayList<>();
+        for (ConfigPublishPayload.ToolSpec t : payload.tools()) {
+            refs.add(ResourceRef.of("TOOL", t.toolId()));
+        }
+        for (ConfigPublishPayload.SkillSpec s : payload.skills()) {
+            refs.add(ResourceRef.of("SKILL", s.skillId()));
+        }
+        for (ConfigPublishPayload.McpServerSpec m : payload.mcpServers()) {
+            refs.add(ResourceRef.of("MCP_SERVER", m.serverId()));
+        }
+        for (ConfigPublishPayload.AgentSpec a : payload.agents()) {
+            refs.add(ResourceRef.of("AGENT", a.agentId()));
+        }
+        if (payload.lifecycle() != null) {
+            ConfigPublishPayload.LifecycleSpec s = payload.lifecycle();
+            refs.add(ResourceRef.of(s.type().toUpperCase(Locale.ROOT), s.objectId()));
+        }
+        if (refs.isEmpty()) refs.add(ResourceRef.of("CONFIG", null));
+        return refs;
     }
 
     private void executeLifecycle(ConfigPublishRequest request, ConfigPublishPayload payload) {

@@ -176,6 +176,29 @@ public class JdbcPublishPolicyRepository implements PublishPolicyPort {
     }
 
     @Override
+    public @NonNull List<PublishPolicy> listEnabledGlobals() {
+        String sql = selectColumns() + """
+                WHERE policy_level = 'GLOBAL'
+                  AND enabled = true
+                ORDER BY tenant_id NULLS FIRST, scope
+                LIMIT 1
+                """;
+        // ⚠️ 跨 scope 查询：PLATFORM 策略 tenant_id 为 NULL，RLS 的读策略放行；
+        //    这里用 null 租户上下文，确保不会因为某个租户的哨兵 id 过滤掉全局默认。
+        try (TenantConnectionLease lease = tenantConnection(null)) {
+            try (PreparedStatement ps = lease.connection().prepareStatement(sql)) {
+                try (ResultSet rs = ps.executeQuery()) {
+                    List<PublishPolicy> rows = new ArrayList<>();
+                    while (rs.next()) rows.add(read(rs));
+                    return rows;
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询全局发布策略失败", e);
+        }
+    }
+
+    @Override
     public @NonNull Optional<PublishPolicy> findByTarget(@NonNull String scope,
                                                           @Nullable String tenantId,
                                                           @NonNull String policyLevel,

@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
@@ -21,7 +22,9 @@ import cn.studykid.multiagent.core.cap.ConfigPublishCommand;
 import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
 import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.core.cap.ConfigRollbackCommand;
+import cn.studykid.multiagent.core.cap.PublishPolicy.PublishMode;
 import cn.studykid.multiagent.core.cap.ReasonCode;
+import cn.studykid.multiagent.application.cap.PublishPolicyService.ResourceRef;
 import cn.studykid.multiagent.ports.persistence.CapAgentDefPort;
 import cn.studykid.multiagent.ports.persistence.CapResultContractPort;
 import cn.studykid.multiagent.ports.persistence.CapRoutingPolicyPort;
@@ -108,6 +111,8 @@ public class ConfigPublishWorkflowService {
     private final CapResultContractPort contracts;
     private final CapRoutingPolicyPort routingPolicies;
     private final Clock clock;
+    /** 发布策略服务；为 null 时沿用旧的「一律等人工审批」行为（仅单测构造使用）。 */
+    private final @Nullable PublishPolicyService policies;
 
     public ConfigPublishWorkflowService(@NonNull ConfigPublishRequestPort requests,
                                         @NonNull ConfigPublishService publisher,
@@ -155,6 +160,27 @@ public class ConfigPublishWorkflowService {
                                         @Nullable CapResultContractPort contracts,
                                         @Nullable CapRoutingPolicyPort routingPolicies,
                                         @NonNull Clock clock) {
+        // ⚠️ 旧构造器保持「一律等人工审批」行为，仅为兼容既有多参单测保留。
+        this(requests, publisher, lifecycle, agentDefs, pointers, releases,
+                contracts, routingPolicies, clock, null);
+    }
+
+    /**
+     * 全参构造器（含发布策略分流）：生产装配使用。
+     *
+     * <p>策略服务为 {@code null} 时沿用旧行为（等人工审批）—— 那不是生产配置，
+     * 只是既有状态机单测的兼容路径。
+     */
+    public ConfigPublishWorkflowService(@NonNull ConfigPublishRequestPort requests,
+                                        @NonNull ConfigPublishService publisher,
+                                        @NonNull ConfigLifecycleService lifecycle,
+                                        @NonNull CapAgentDefPort agentDefs,
+                                        @NonNull ConfigPointerPort pointers,
+                                        @NonNull ConfigReleasePort releases,
+                                        @Nullable CapResultContractPort contracts,
+                                        @Nullable CapRoutingPolicyPort routingPolicies,
+                                        @NonNull Clock clock,
+                                        @Nullable PublishPolicyService policies) {
         this.requests = requests;
         this.publisher = publisher;
         this.lifecycle = lifecycle;
@@ -164,6 +190,7 @@ public class ConfigPublishWorkflowService {
         this.contracts = contracts;
         this.routingPolicies = routingPolicies;
         this.clock = clock;
+        this.policies = policies;
     }
 
     // ── 第一步：申请 ───────────────────────────────────────────────
@@ -277,7 +304,8 @@ public class ConfigPublishWorkflowService {
         ConfigPublishPayload payload = ConfigPublishPayload.publish(agents, resultContracts,
                 routingPolicies, expectedPublishSeq);
         precheck(tenantId, payload, requesterId);
-        return insert(tenantId, payload, reason, requesterId);
+        return autoRoute(insert(tenantId, payload, reason, requesterId), scope, tenantId,
+                refsOf(payload), requesterId);
     }
 
     /**
@@ -300,7 +328,8 @@ public class ConfigPublishWorkflowService {
             @NonNull String requesterId) {
         requireTenantScope(scope);
         ConfigPublishPayload payload = ConfigPublishPayload.rollback(targetReleaseId, expectedPublishSeq);
-        return insert(tenantId, payload, reason, requesterId);
+        return autoRoute(insert(tenantId, payload, reason, requesterId), scope, tenantId,
+                refsOf(payload), requesterId);
     }
 
     /**
@@ -322,7 +351,8 @@ public class ConfigPublishWorkflowService {
         requireTenantScope(scope);
         requireTenantObjectType(spec.type());
         ConfigPublishPayload payload = ConfigPublishPayload.lifecycle(spec);
-        return insert(tenantId, payload, reason, requesterId);
+        return autoRoute(insert(tenantId, payload, reason, requesterId), scope, tenantId,
+                refsOf(payload), requesterId);
     }
 
     // ── 第二步：审批 ───────────────────────────────────────────────
@@ -342,7 +372,19 @@ public class ConfigPublishWorkflowService {
                                                 @NonNull Decision decision,
                                                 String note,
                                                 @NonNull String approverId) {
-        return requests.decide(tenantId, requestId, decision, note, approverId);
+        ConfigPublishRequest updated = requests.decide(tenantId, requestId, decision, note, approverId);
+        // APPROVAL_AUTO：人工审批通过后自动执行，不再要求第二次点击「执行」。
+        if (policies == null || decision != Decision.APPROVE
+                || updated.state() != ConfigPublishRequest.State.APPROVED) {
+            return updated;
+        }
+        ConfigPublishPayload payload = ConfigPublishPayload.fromJson(updated.payload());
+        PublishMode mode = policies.resolveForResources("TENANT", tenantId, refsOf(payload));
+        if (mode == PublishMode.APPROVAL_AUTO) {
+            log.info("策略 APPROVAL_AUTO：申请 {} 审批通过，自动执行", requestId);
+            return apply(tenantId, requestId, approverId);
+        }
+        return updated;
     }
 
     // ── 第三步：执行 ───────────────────────────────────────────────
@@ -459,6 +501,50 @@ public class ConfigPublishWorkflowService {
             throw new IllegalArgumentException("变更理由不能为空");
         }
         return requests.insert(tenantId, payload.operation(), payload.toJson(), reason, requesterId);
+    }
+
+    /**
+     * 申请后的按策略分流（服务端强制）。
+     *
+     * <p>APPROVAL_* → 停在 PENDING 等真人双人复核；MANUAL → 系统自动放行到 APPROVED、
+     * 等人工点「执行」；DIRECT → 自动放行并立即执行。自动放行的审批人写入固定系统主体，
+     * 既满足「审批人 ≠ 申请人」约束，又在审计上与真人复核区分开。
+     */
+    private ConfigPublishRequest autoRoute(ConfigPublishRequest created, ConfigRelease.Scope scope,
+                                           String tenantId, List<ResourceRef> refs,
+                                           String requesterId) {
+        if (policies == null) return created;
+        String scopeName = scope == ConfigRelease.Scope.PLATFORM ? "PLATFORM" : "TENANT";
+        PublishMode mode = policies.resolveForResources(scopeName, tenantId, refs);
+        log.info("申请 {} 按发布策略 {} 自动分流", created.requestId(), mode);
+        if (mode.requiresApproval()) return created;
+        ConfigPublishRequest approved = requests.decide(tenantId, created.requestId(),
+                Decision.APPROVE,
+                PublishPolicyService.POLICY_AUTO_NOTE_PREFIX + mode.name(),
+                PublishPolicyService.POLICY_AUTO_APPROVER);
+        return mode.autoPublishOnApproval()
+                ? apply(tenantId, approved.requestId(), requesterId)
+                : approved;
+    }
+
+    /** 从载荷提取参与分流判定的资源引用；空集合回退到 GLOBAL 策略。 */
+    private static List<ResourceRef> refsOf(ConfigPublishPayload payload) {
+        List<ResourceRef> refs = new ArrayList<>();
+        for (ConfigPublishPayload.AgentSpec a : payload.agents()) {
+            refs.add(ResourceRef.of("AGENT", a.agentId()));
+        }
+        for (ConfigPublishPayload.ResultContractSpec c : payload.resultContracts()) {
+            refs.add(ResourceRef.of("RESULT_CONTRACT", c.contractId()));
+        }
+        for (ConfigPublishPayload.RoutingPolicySpec r : payload.routingPolicies()) {
+            refs.add(ResourceRef.of("ROUTING_POLICY", r.policyId()));
+        }
+        if (payload.lifecycle() != null) {
+            ConfigPublishPayload.LifecycleSpec s = payload.lifecycle();
+            refs.add(ResourceRef.of(s.type().toUpperCase(Locale.ROOT), s.objectId()));
+        }
+        if (refs.isEmpty()) refs.add(ResourceRef.of("CONFIG", null));
+        return refs;
     }
 
     /** 申请阶段的门禁预检。 */

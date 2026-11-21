@@ -89,29 +89,96 @@ public class PublishPolicyService {
                                               @Nullable String tenantId,
                                               @Nullable String resourceKind,
                                               @Nullable String resourceId) {
+        return resolveFrom(policies.listEnabled(scope, tenantId), scope, tenantId,
+                resourceKind, resourceId).orElseGet(() -> {
+            log.debug("({},{}) 未配置发布策略，默认 MANUAL 模式", scope, tenantId);
+            return PublishMode.MANUAL;
+        });
+    }
+
+    /**
+     * 按 (scope, tenant, 资源) 解析模式；精确匹配无果时回退到任意作用域的 GLOBAL 默认策略。
+     *
+     * <p>⚠️ 能力目录横跨 PLATFORM 与 TENANT 两条发布通道，策略配置页只往当前作用域写
+     * GLOBAL 策略。没有这个回退就会出现「配了全局手动发布，平台通道仍按缺省审批走」的割裂。
+     * 优先级仍然是「精确三层 > 跨作用域 GLOBAL > MANUAL 安全默认」。
+     */
+    public @NonNull PublishMode resolveWithGlobalFallback(@NonNull String scope,
+                                                           @Nullable String tenantId,
+                                                           @Nullable String resourceKind,
+                                                           @Nullable String resourceId) {
         List<PublishPolicy> enabled = policies.listEnabled(scope, tenantId);
-        // 按优先级分组
+        Optional<PublishMode> precise = resolveFrom(enabled, scope, tenantId,
+                resourceKind, resourceId);
+        if (precise.isPresent()) return precise.get();
+        List<PublishPolicy> globals = policies.listEnabledGlobals();
+        if (!globals.isEmpty()) {
+            PublishMode fallback = PublishMode.valueOf(globals.get(0).publishMode());
+            log.debug("({},{}) 无精确策略，回退全局默认 {}", scope, tenantId, fallback);
+            return fallback;
+        }
+        log.debug("({},{}) 无精确策略也无全局默认，采用 MANUAL 安全默认", scope, tenantId);
+        return PublishMode.MANUAL;
+    }
+
+    /** 资源引用（按资源类型 / 实例解析策略用）。 */
+    public record ResourceRef(@NonNull String kind, @Nullable String id) {
+        public static ResourceRef of(@NonNull String kind, @Nullable String id) {
+            return new ResourceRef(kind, id);
+        }
+    }
+
+    /**
+     * 一批资源综合出唯一发布模式：<b>最严格者胜</b>。
+     *
+     * <p>⚠️ 一次发布申请可同时携带多种资源（如 Tool + Skill）。只要其中任一资源要求审批，
+     * 整批就走审批 —— 否则「批的是 A、免审的是 B」会让审批人对自己没见过的变更签字。
+     * 严格度：APPROVAL_* > MANUAL > DIRECT。
+     */
+    public @NonNull PublishMode resolveForResources(@NonNull String scope,
+                                                     @Nullable String tenantId,
+                                                     @NonNull List<ResourceRef> refs) {
+        PublishMode strictest = PublishMode.DIRECT;
+        for (ResourceRef ref : refs) {
+            PublishMode mode = resolveWithGlobalFallback(scope, tenantId, ref.kind(), ref.id());
+            if (mode.requiresApproval()) return mode;
+            if (mode == PublishMode.MANUAL) strictest = PublishMode.MANUAL;
+        }
+        return strictest;
+    }
+
+    /**
+     * 策略免审批时的「系统审批人」主体标识。
+     *
+     * <p>⚠️ 申请单存储层要求 approver_id ≠ requester_id。这里用一个固定的系统主体：
+     * 它既满足约束、又在审计里明确区分「策略自动放行」与「真人双人复核」，
+     * 不会被误读成某个管理员自己批了自己。
+     */
+    public static final String POLICY_AUTO_APPROVER = "00000000-0000-0000-0000-000000000002";
+
+    /** 策略自动放行的审批意见前缀（写入 decision_note 留痕）。 */
+    public static final String POLICY_AUTO_NOTE_PREFIX = "发布策略自动放行（无人工复核）：";
+
+    private Optional<PublishMode> resolveFrom(List<PublishPolicy> enabled,
+                                               String scope, String tenantId,
+                                               String resourceKind, String resourceId) {
         Optional<PublishPolicy> instance = enabled.stream()
                 .filter(p -> "INSTANCE".equals(p.policyLevel())
                         && matches(p, scope, tenantId, resourceKind, resourceId))
                 .findFirst();
-        if (instance.isPresent()) return PublishMode.valueOf(instance.get().publishMode());
+        if (instance.isPresent()) return Optional.of(PublishMode.valueOf(instance.get().publishMode()));
 
         Optional<PublishPolicy> byType = enabled.stream()
                 .filter(p -> "RESOURCE_TYPE".equals(p.policyLevel())
                         && matches(p, scope, tenantId, resourceKind, null))
                 .findFirst();
-        if (byType.isPresent()) return PublishMode.valueOf(byType.get().publishMode());
+        if (byType.isPresent()) return Optional.of(PublishMode.valueOf(byType.get().publishMode()));
 
         Optional<PublishPolicy> global = enabled.stream()
                 .filter(p -> "GLOBAL".equals(p.policyLevel())
                         && matches(p, scope, tenantId, null, null))
                 .findFirst();
-        if (global.isPresent()) return PublishMode.valueOf(global.get().publishMode());
-
-        // 安全默认
-        log.debug("({},{}) 未配置发布策略，默认 MANUAL 模式", scope, tenantId);
-        return PublishMode.MANUAL;
+        return global.map(p -> PublishMode.valueOf(p.publishMode()));
     }
 
     /** 标记资源正处于审批/发布中（策略变更禁止）。 */

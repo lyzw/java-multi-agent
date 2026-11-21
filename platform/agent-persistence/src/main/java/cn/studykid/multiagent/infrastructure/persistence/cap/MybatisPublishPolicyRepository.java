@@ -115,6 +115,15 @@ public class MybatisPublishPolicyRepository implements PublishPolicyPort {
     }
 
     @Override
+    public @NonNull List<PublishPolicy> listEnabledGlobals() {
+        return inTenantScope(null, () -> TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(null),
+                conn -> mapper.listEnabledGlobals().stream()
+                        .map(MybatisPublishPolicyRepository::toRecord)
+                        .toList()));
+    }
+
+    @Override
     public @NonNull Optional<PublishPolicy> findByTarget(@NonNull String scope,
                                                           @Nullable String tenantId,
                                                           @NonNull String policyLevel,

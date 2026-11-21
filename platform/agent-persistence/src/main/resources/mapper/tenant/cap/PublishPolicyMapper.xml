@@ -62,6 +62,14 @@
         ORDER BY policy_level, resource_kind NULLS FIRST
     </select>
 
+    <select id="listEnabledGlobals" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.PublishPolicyDO">
+        <include refid="selectColumns"/>
+        WHERE policy_level = 'GLOBAL'
+          AND enabled = true
+        ORDER BY tenant_id NULLS FIRST, scope
+        LIMIT 1
+    </select>
+
     <select id="findByTarget" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.PublishPolicyDO">
         <include refid="selectColumns"/>
         WHERE scope = #{scope}

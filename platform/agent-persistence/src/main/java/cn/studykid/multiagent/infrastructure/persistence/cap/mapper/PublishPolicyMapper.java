@@ -51,6 +51,9 @@ public interface PublishPolicyMapper extends BaseMapper<PublishPolicyDO> {
     List<PublishPolicyDO> listEnabled(@Param("scope") String scope,
                                       @Param("tenantId") UUID tenantId);
 
+    /** 跨 scope 查启用的 GLOBAL 策略（PLATFORM 优先），至多一条。 */
+    List<PublishPolicyDO> listEnabledGlobals();
+
     /** 按完整键查找；resourceKind / resourceId 的空值由适配层归一为空串（与原实现一致）。 */
     Optional<PublishPolicyDO> findByTarget(@Param("scope") String scope,
                                            @Param("tenantId") UUID tenantId,

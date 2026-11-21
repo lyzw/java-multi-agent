@@ -45,4 +45,14 @@ public interface PublishPolicyPort {
                                                   @NonNull String policyLevel,
                                                   @Nullable String resourceKind,
                                                   @Nullable String resourceId);
+
+    /**
+     * 列出所有启用的 GLOBAL 策略（<b>跨 scope</b>），供「全局默认策略」回退使用。
+     *
+     * <p>⚠️ 为什么需要它：能力目录同时存在 PLATFORM 与 TENANT 两条发布通道，
+     * 而策略配置页只往其中一侧写 GLOBAL 策略。若精确 (scope, tenant) 解析无果，
+     * 就用这里的 GLOBAL 策略作为默认值，避免「明明配了全局手动发布，
+     * 另一条通道却按缺省审批走」的割裂。结果至多一条（PLATFORM 优先）。
+     */
+    @NonNull List<PublishPolicy> listEnabledGlobals();
 }
