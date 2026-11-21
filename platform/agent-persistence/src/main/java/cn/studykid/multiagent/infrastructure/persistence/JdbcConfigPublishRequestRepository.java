@@ -353,7 +353,9 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
                                     ps.setTimestamp(5, Timestamp.from(appliedAt));
                                 }
                                 bindTenant(ps, 6, tenantId);
-                                ps.setString(5, requestId);
+                                // ⚠️ 新增 fail_stage / fail_details 两个绑定位后，request_id 顺延到 7；
+                                //    仍写 5 会覆盖 applied_at 并留下未设定的 ?7（执行期才炸）。
+                                ps.setString(7, requestId);
                                 try (ResultSet rs = ps.executeQuery()) {
                                     if (!rs.next()) {
                                         throw new NotFoundException(requestId);
@@ -413,7 +415,8 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
                 WHERE tenant_id IS NOT DISTINCT FROM ?::uuid AND request_id = ?::uuid
                 RETURNING request_id::text, tenant_id::text, operation, payload::text,
                           reason, requester_id, state, approver_id, decision_note,
-                          requested_at, decided_at, applied_at, failure_reason, scope
+                          requested_at, decided_at, applied_at, failure_reason, scope,
+                          resource_kind, resource_id, target_version, fail_stage, fail_details::text
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, target.name());

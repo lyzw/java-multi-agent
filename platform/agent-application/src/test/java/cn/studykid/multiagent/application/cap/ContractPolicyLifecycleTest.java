@@ -555,7 +555,8 @@ class ContractPolicyLifecycleTest {
 
             @Override
             public ConfigPublishRequest markFailed(String tenantId, String requestId,
-                                                   String reason) {
+                                                   String reason, String failStage,
+                                                   String failDetailsJson) {
                 ConfigPublishRequest row = requests.get(requestId);
                 if (row == null) {
                     throw new NotFoundException(requestId);

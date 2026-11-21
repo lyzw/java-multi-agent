@@ -92,7 +92,8 @@ class PlatformCapabilityPublishServiceTest {
                     operation, payload, reason, requesterId,
                     ConfigPublishRequest.State.PENDING, null, null, CLOCK.instant(),
                     null, null, null,
-                    tenantId == null ? ConfigRelease.Scope.PLATFORM : ConfigRelease.Scope.TENANT);
+                    tenantId == null ? ConfigRelease.Scope.PLATFORM : ConfigRelease.Scope.TENANT,
+                    null, null, null, null, null);
             rows.put(row.requestId(), row);
             return row;
         }
@@ -125,7 +126,8 @@ class PlatformCapabilityPublishServiceTest {
             ConfigPublishRequest updated = new ConfigPublishRequest(row.requestId(), row.tenantId(),
                     row.operation(), row.payload(), row.reason(), row.requesterId(), target,
                     approverId, note, row.requestedAt(), CLOCK.instant(), null, null,
-                    row.scope());
+                    row.scope(), row.resourceKind(), row.resourceId(), row.targetVersion(),
+                    row.failStage(), row.failDetails());
             rows.put(requestId, updated);
             return updated;
         }
@@ -137,19 +139,24 @@ class PlatformCapabilityPublishServiceTest {
             ConfigPublishRequest updated = new ConfigPublishRequest(row.requestId(), row.tenantId(),
                     row.operation(), row.payload(), row.reason(), row.requesterId(),
                     ConfigPublishRequest.State.APPLIED, row.approverId(), row.decisionNote(),
-                    row.requestedAt(), row.decidedAt(), appliedAt, null, row.scope());
+                    row.requestedAt(), row.decidedAt(), appliedAt, null, row.scope(),
+                    row.resourceKind(), row.resourceId(), row.targetVersion(),
+                    row.failStage(), row.failDetails());
             rows.put(requestId, updated);
             marks.add("APPLIED");
             return updated;
         }
 
         @Override
-        public ConfigPublishRequest markFailed(String tenantId, String requestId, String reason) {
+        public ConfigPublishRequest markFailed(String tenantId, String requestId, String reason,
+                                               String failStage, String failDetailsJson) {
             ConfigPublishRequest row = rows.get(requestId);
             ConfigPublishRequest updated = new ConfigPublishRequest(row.requestId(), row.tenantId(),
                     row.operation(), row.payload(), row.reason(), row.requesterId(),
                     ConfigPublishRequest.State.FAILED, row.approverId(), row.decisionNote(),
-                    row.requestedAt(), row.decidedAt(), null, reason, row.scope());
+                    row.requestedAt(), row.decidedAt(), null, reason, row.scope(),
+                    row.resourceKind(), row.resourceId(), row.targetVersion(),
+                    failStage, failDetailsJson);
             rows.put(requestId, updated);
             marks.add("FAILED:" + reason);
             return updated;

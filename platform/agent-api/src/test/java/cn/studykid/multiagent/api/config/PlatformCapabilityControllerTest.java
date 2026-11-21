@@ -56,7 +56,7 @@ class PlatformCapabilityControllerTest {
         return new ConfigPublishRequest("req-1", null, ConfigPublishRequest.Operation.PUBLISH,
                 "{}", "登记", REQUESTER, ConfigPublishRequest.State.PENDING, null, null,
                 java.time.Instant.parse("2026-01-01T00:00:00Z"), null, null, null,
-                ConfigRelease.Scope.PLATFORM);
+                ConfigRelease.Scope.PLATFORM, null, null, null, null, null);
     }
 
     @Test

@@ -103,7 +103,8 @@ class PlatformAgentConfigControllerTest {
         private static ConfigPublishRequest request(String tenantId, ConfigPublishRequest.Operation op) {
             return new ConfigPublishRequest("req-1", tenantId, op, "{}", "reason",
                     "ops-user", ConfigPublishRequest.State.PENDING, null, null,
-                    Instant.now(), null, null, null, ConfigRelease.Scope.TENANT);
+                    Instant.now(), null, null, null, ConfigRelease.Scope.TENANT,
+                    null, null, null, null, null);
         }
     }
 
@@ -129,7 +130,8 @@ class PlatformAgentConfigControllerTest {
             return new ConfigPublishRequest("req-global", null,
                     ConfigPublishRequest.Operation.PUBLISH, "{}", reason, requesterId,
                     ConfigPublishRequest.State.PENDING, null, null,
-                    Instant.now(), null, null, null, ConfigRelease.Scope.PLATFORM);
+                    Instant.now(), null, null, null, ConfigRelease.Scope.PLATFORM,
+                    null, null, null, null, null);
         }
     }
 

@@ -71,6 +71,7 @@ CREATE INDEX IF NOT EXISTS idx_cap_publish_policy_scope
     ON public.cap_publish_policy (scope, tenant_id) WHERE enabled = true;
 
 ALTER TABLE ONLY public.cap_publish_policy ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY public.cap_publish_policy FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY cap_publish_policy_read ON public.cap_publish_policy
     FOR SELECT USING (
@@ -142,6 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_cap_config_draft_tenant_state
     ON public.cap_config_draft (scope, tenant_id, draft_state, updated_at DESC);
 
 ALTER TABLE ONLY public.cap_config_draft ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY public.cap_config_draft FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY cap_config_draft_read ON public.cap_config_draft
     FOR SELECT USING (tenant_id IS NULL OR tenant_id = public.current_tenant_id());
@@ -204,6 +206,7 @@ CREATE INDEX IF NOT EXISTS idx_cap_audit_log_event_time
     ON public.cap_audit_log (event_type, created_at DESC);
 
 ALTER TABLE ONLY public.cap_audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY public.cap_audit_log FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY cap_audit_log_read ON public.cap_audit_log
     FOR SELECT USING (tenant_id IS NULL OR tenant_id = public.current_tenant_id());
