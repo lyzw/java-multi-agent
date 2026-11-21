@@ -21,8 +21,8 @@ spring:
     #    「非特权 + 无 BYPASSRLS」的应用账号（详见 RagStartupSelfCheck）。
     #    超级用户或 rls-bypass 角色会通过启动自检被拒绝启动。
     url: ${RAG_PG_URL:jdbc:postgresql://localhost:5432/study_rag}
-    username: ${RAG_PG_USERNAME:rag_app}
-    password: ${RAG_PG_PASSWORD:rag_app}
+    username: ${RAG_PG_USERNAME:}
+    password: ${RAG_PG_PASSWORD:}
     driver-class-name: org.postgresql.Driver
     # ⚠️ Druid 语义键名（2026-11-21 连接池由 HikariCP 切换为 Druid）：
     #    max-active ≡ 池上限；min-idle ≡ 常驻连接数；
