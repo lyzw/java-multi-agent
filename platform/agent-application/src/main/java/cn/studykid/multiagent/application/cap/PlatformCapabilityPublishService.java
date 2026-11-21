@@ -390,13 +390,19 @@ public class PlatformCapabilityPublishService {
     private ConfigPublishRequest autoRoute(ConfigPublishRequest created,
                                            List<ResourceRef> refs, String requesterId) {
         if (policies == null) return created;
-        PublishMode mode = policies.resolveForResources("PLATFORM", null, refs);
-        log.info("平台申请 {} 按发布策略 {} 自动分流", created.requestId(), mode);
+        PublishPolicyService.ResolveResult res = policies.resolveDetailedForResources("PLATFORM", null, refs);
+        PublishMode mode = res.mode();
+        log.info("平台申请 {} 按发布策略 {} 自动分流（policyId={}, level={}, globalFallback={}）",
+                created.requestId(), mode, res.policyId(), res.policyLevel(), res.fromGlobalFallback());
         if (mode.requiresApproval()) return created;
+        // ⚠️ 2026-11-21 M4：审批意见钉死策略决策来源，见 ConfigPublishWorkflowService.autoRoute。
+        String decisionNote = PublishPolicyService.POLICY_AUTO_NOTE_PREFIX + mode.name()
+                + "; policyLevel=" + res.policyLevel()
+                + "; policyId=" + res.policyId()
+                + "; fromGlobalFallback=" + res.fromGlobalFallback();
         ConfigPublishRequest approved = session.inPlatformScopeSession(() -> requests.decide(
                 null, created.requestId(), ConfigPublishRequestPort.Decision.APPROVE,
-                PublishPolicyService.POLICY_AUTO_NOTE_PREFIX + mode.name(),
-                PublishPolicyService.POLICY_AUTO_APPROVER));
+                decisionNote, PublishPolicyService.POLICY_AUTO_APPROVER));
         return mode.autoPublishOnApproval()
                 ? apply(created.requestId(), requesterId)
                 : approved;

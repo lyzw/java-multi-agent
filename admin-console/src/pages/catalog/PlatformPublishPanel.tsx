@@ -208,7 +208,7 @@ export function PlatformPublishPanel<TValues>({
               request.state === 'APPLIED'
                 ? '执行完成，平台配置已改变。'
                 : request.state === 'APPROVED'
-                  ? (request.decisionNote?.startsWith('发布策略自动放行')
+                  ? (request.decisionNote?.includes('发布策略自动放行')
                       ? '已按发布策略免审批放行（非人工复核），但配置尚未改变 —— 需点击「执行」才写入。'
                       : '审批已通过，但配置尚未改变 —— 需点击「执行」才写入。')
                   : request.state === 'REJECTED'

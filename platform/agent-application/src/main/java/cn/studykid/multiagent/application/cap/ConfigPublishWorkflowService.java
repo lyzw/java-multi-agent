@@ -515,13 +515,19 @@ public class ConfigPublishWorkflowService {
                                            String requesterId) {
         if (policies == null) return created;
         String scopeName = scope == ConfigRelease.Scope.PLATFORM ? "PLATFORM" : "TENANT";
-        PublishMode mode = policies.resolveForResources(scopeName, tenantId, refs);
-        log.info("申请 {} 按发布策略 {} 自动分流", created.requestId(), mode);
+        PublishPolicyService.ResolveResult res = policies.resolveDetailedForResources(scopeName, tenantId, refs);
+        PublishMode mode = res.mode();
+        log.info("申请 {} 按发布策略 {} 自动分流（policyId={}, level={}, globalFallback={}）",
+                created.requestId(), mode, res.policyId(), res.policyLevel(), res.fromGlobalFallback());
         if (mode.requiresApproval()) return created;
+        // ⚠️ 2026-11-21 M4：审批意见里钉死是哪条策略（policyId + level）决定的，
+        //    事后审计/排障（"为啥这个租户免审而隔壁租户要审"）的唯一依据就在这里。
+        String decisionNote = PublishPolicyService.POLICY_AUTO_NOTE_PREFIX + mode.name()
+                + "; policyLevel=" + res.policyLevel()
+                + "; policyId=" + res.policyId()
+                + "; fromGlobalFallback=" + res.fromGlobalFallback();
         ConfigPublishRequest approved = requests.decide(tenantId, created.requestId(),
-                Decision.APPROVE,
-                PublishPolicyService.POLICY_AUTO_NOTE_PREFIX + mode.name(),
-                PublishPolicyService.POLICY_AUTO_APPROVER);
+                Decision.APPROVE, decisionNote, PublishPolicyService.POLICY_AUTO_APPROVER);
         return mode.autoPublishOnApproval()
                 ? apply(tenantId, approved.requestId(), requesterId)
                 : approved;

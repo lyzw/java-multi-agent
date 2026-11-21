@@ -64,6 +64,30 @@ public record PublishPolicy(
         public boolean autoPublishOnApproval() {
             return this == DIRECT || this == APPROVAL_AUTO;
         }
+
+        /**
+         * 严格度比较：返回 this.ordinal - other.ordinal（审批类 > MANUAL > DIRECT）。
+         * 严格度：APPROVAL_MANUAL(2) > APPROVAL_AUTO(3) > MANUAL(1) > DIRECT(0)。
+         *
+         * 注意：两个 APPROVAL_* 之间谁更严格并不重要——都 requiresApproval()，
+         * 调用方取到第一个审批类即可提前返回。这里仅用于"DIRECT vs MANUAL vs APPROVAL"
+         * 三者之间的严格度判定，保持排序一致。
+         */
+        public int compareStrictness(@NonNull PublishMode other) {
+            int o1 = switch (this) {
+                case DIRECT            -> 0;
+                case MANUAL            -> 1;
+                case APPROVAL_MANUAL   -> 2;
+                case APPROVAL_AUTO     -> 3;
+            };
+            int o2 = switch (other) {
+                case DIRECT            -> 0;
+                case MANUAL            -> 1;
+                case APPROVAL_MANUAL   -> 2;
+                case APPROVAL_AUTO     -> 3;
+            };
+            return Integer.compare(o1, o2);
+        }
     }
 
     /** 策略层级。 */

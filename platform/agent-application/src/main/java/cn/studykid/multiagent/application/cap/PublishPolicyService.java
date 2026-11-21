@@ -122,6 +122,93 @@ public class PublishPolicyService {
     }
 
     /** 资源引用（按资源类型 / 实例解析策略用）。 */
+    /**
+     * 解析结果：发布模式 + 命中的具体策略（方便审计）。
+     *
+     * <p>⚠️ 2026-11-21 M4：autoRoute 之前只记录了 "mode=DIRECT"，
+     * 看不到究竟是 INSTANCE 策略覆盖了，还是 GLOBAL 兜底 —— 事后审计和排障
+     * （"为啥这个租户免审而隔壁租户要审"）都缺关键证据。
+     */
+    public record ResolveResult(
+            @NonNull PublishMode mode,
+            @Nullable UUID       policyId,
+            @Nullable String     policyLevel,
+            boolean              fromGlobalFallback
+    ) {}
+
+    /**
+     * 类似 {@link #resolveForResources}，但同时返回**最终决定的那条策略**。
+     * 决定算法：所有资源综合后取最严格者；取到的第一条严格者对应的策略为"决策策略"。
+     */
+    public @NonNull ResolveResult resolveDetailedForResources(@NonNull String scope,
+                                                               @Nullable String tenantId,
+                                                               @NonNull List<ResourceRef> refs) {
+        PublishMode strictest = PublishMode.DIRECT;
+        PublishPolicy decisionPolicy = null;
+        boolean fromGlobal = false;
+        for (ResourceRef ref : refs) {
+            List<PublishPolicy> enabled = policies.listEnabled(scope, tenantId);
+            Optional<PublishPolicy> matched = bestMatch(enabled, scope, tenantId, ref.kind(), ref.id());
+            boolean useFallback = false;
+            if (matched.isEmpty()) {
+                Optional<PublishPolicy> g = policies.listEnabledGlobals().stream()
+                        .filter(p -> matches(p, scope, tenantId, ref.kind(), ref.id()))
+                        .findFirst();
+                if (g.isPresent()) {
+                    matched = g;
+                    useFallback = true;
+                }
+            }
+            PublishMode m;
+            if (matched.isPresent()) {
+                m = PublishMode.valueOf(matched.get().publishMode());
+                if (decisionPolicy == null
+                        || strictest.compareStrictness(m) > 0) {
+                    decisionPolicy = matched.get();
+                    fromGlobal = useFallback;
+                }
+            } else {
+                m = PublishMode.MANUAL;  // 安全默认
+            }
+            if (m.requiresApproval()) {
+                if (decisionPolicy == null) decisionPolicy = matched.orElse(null);
+                return new ResolveResult(m,
+                        decisionPolicy == null ? null : decisionPolicy.policyId(),
+                        decisionPolicy == null ? null : decisionPolicy.policyLevel(),
+                        fromGlobal);
+            }
+            if (m == PublishMode.MANUAL) {
+                strictest = PublishMode.MANUAL;
+            }
+        }
+        return new ResolveResult(strictest,
+                decisionPolicy == null ? null : decisionPolicy.policyId(),
+                decisionPolicy == null ? null : decisionPolicy.policyLevel(),
+                fromGlobal);
+    }
+
+    /** 给定 enabled 列表 + (scope, tenant, kind, id) 找最具体的一条；找不到返回 empty。 */
+    private Optional<PublishPolicy> bestMatch(List<PublishPolicy> enabled,
+                                               String scope, String tenantId,
+                                               String resourceKind, String resourceId) {
+        Optional<PublishPolicy> instance = enabled.stream()
+                .filter(p -> "INSTANCE".equals(p.policyLevel())
+                        && matches(p, scope, tenantId, resourceKind, resourceId))
+                .findFirst();
+        if (instance.isPresent()) return instance;
+
+        Optional<PublishPolicy> byType = enabled.stream()
+                .filter(p -> "RESOURCE_TYPE".equals(p.policyLevel())
+                        && matches(p, scope, tenantId, resourceKind, null))
+                .findFirst();
+        if (byType.isPresent()) return byType;
+
+        return enabled.stream()
+                .filter(p -> "GLOBAL".equals(p.policyLevel())
+                        && matches(p, scope, tenantId, null, null))
+                .findFirst();
+    }
+
     public record ResourceRef(@NonNull String kind, @Nullable String id) {
         public static ResourceRef of(@NonNull String kind, @Nullable String id) {
             return new ResourceRef(kind, id);
@@ -157,7 +244,9 @@ public class PublishPolicyService {
     public static final String POLICY_AUTO_APPROVER = "00000000-0000-0000-0000-000000000002";
 
     /** 策略自动放行的审批意见前缀（写入 decision_note 留痕）。 */
-    public static final String POLICY_AUTO_NOTE_PREFIX = "发布策略自动放行（无人工复核）：";
+        /** 策略自动放行的审批意见前缀（写入 decision_note 留痕）。
+     *  调用方必须在后面追加 mode + 命中策略细节（policyId/policyLevel）—— 见 {@link ResolveResult}。 */
+    public static final String POLICY_AUTO_NOTE_PREFIX = "[发布策略自动放行] mode=";
 
     private Optional<PublishMode> resolveFrom(List<PublishPolicy> enabled,
                                                String scope, String tenantId,
