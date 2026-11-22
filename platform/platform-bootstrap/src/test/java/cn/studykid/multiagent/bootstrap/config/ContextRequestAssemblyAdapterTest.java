@@ -263,6 +263,14 @@ class ContextRequestAssemblyAdapterTest {
         public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
             return List.of();
         }
+        @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+        @Override
+        public boolean updateDraftGlobal(CapAgentDef def) {
+            return false;
+        }
 }
 
     private static final class StubCatalog implements ModelCatalogPort {

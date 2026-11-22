@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.infrastructure.persistence.cap;
 
 import java.util.ArrayList;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -149,6 +150,34 @@ public class MybatisCapAgentDefRepository implements CapAgentDefPort {
                 dataSource, tenantContext(GLOBAL_CONTEXT_TENANT), conn -> mapper
                         .findLatestGlobal(agentId)
                         .map(MybatisCapAgentDefRepository::toRecord)));
+    }
+
+    @Override
+    public boolean publishDraftGlobal(@NonNull String agentId, int version,
+                                      @NonNull Instant publishedAt) {
+        return inTenantScope(GLOBAL_CONTEXT_TENANT, () -> TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(GLOBAL_CONTEXT_TENANT), conn ->
+                        mapper.publishDraft(agentId, version, publishedAt) > 0));
+    }
+
+    public boolean updateDraftGlobal(@NonNull CapAgentDef def) {
+        return inTenantScope(GLOBAL_CONTEXT_TENANT, () -> TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(GLOBAL_CONTEXT_TENANT), conn -> mapper.updateDraft(
+                        def.agentId(),
+                        def.version(),
+                        def.name(),
+                        def.description(),
+                        toJson(def.roles()),
+                        toJson(def.enabledSkills()),
+                        toJson(def.skillBundles()),
+                        toJson(def.capabilityTags()),
+                        def.overrides(),
+                        def.orchestration(),
+                        def.instructions(),
+                        def.modelRef(),
+                        def.generationParams(),
+                        def.configFingerprint(),
+                        java.time.Instant.now()) > 0));
     }
 
     @Override

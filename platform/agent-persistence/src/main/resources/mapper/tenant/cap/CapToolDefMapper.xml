@@ -107,6 +107,43 @@
       SQL_LIST_VERSIONS：该 id 的全部版本行（不可变历史，按版本倒序 · 能力目录版本回溯用）。
       ⚠️ 与 SQL_LIST_ALL 的「每 id 最高版本」口径不同：这是版本维度的全量历史。
     -->
+    <!--
+      SQL_UPDATE_DRAFT：就地更新一条**未发布草稿**版本行。
+      ⚠️ WHERE 带 published_at IS NULL —— 已发布行是线上生效过的不可变历史，
+         DB 触发器也会拒改；这里多一层条件是为了「更新不到就返回 0」而不是抛异常，
+         让调用方能明确区分「改成了草稿」与「目标已发布」。
+      ⚠️ 不更新 version / created_at：版本号是身份，创建时间是首版时刻。
+    -->
+    <!--
+      SQL_PUBLISH_DRAFT：把已存在的**未发布草稿**版本行转正（写 published_at）。
+      ⚠️ WHERE 带 published_at IS NULL —— 只转正草稿；影响行数 0 表示没有草稿可转正，
+         调用方应回落到 insert 路径（版本行在提交时不存在的老数据）。
+      ⚠️ DB 触发器对 OLD.published_at IS NULL 的行放行 UPDATE，因此「草稿 → 已发布」合法。
+    -->
+    <update id="publishDraft">
+        UPDATE cap_tool_def
+        SET published_at = #{publishedAt}
+        WHERE id = #{id} AND version = #{version} AND published_at IS NULL
+    </update>
+
+    <update id="updateDraft">
+        UPDATE cap_tool_def
+        SET name = #{name},
+            kind = #{kind},
+            risk_level = #{riskLevel},
+            mcp_server_id = #{mcpServerId},
+            mcp_tool_name = #{mcpToolName},
+            http_method = #{httpMethod},
+            http_url = #{httpUrl},
+            http_timeout_ms = #{httpTimeoutMs},
+            input_schema = #{inputSchema}::jsonb,
+            param_policies = #{paramPolicies}::jsonb,
+            description = #{description},
+            config_fingerprint = #{configFingerprint},
+            updated_at = #{updatedAt}
+        WHERE id = #{id} AND version = #{version} AND published_at IS NULL
+    </update>
+
     <select id="listVersions" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapToolDefDO">
         <include refid="selectColumns"/>
         WHERE id = #{id}

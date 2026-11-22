@@ -17,6 +17,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
@@ -336,7 +337,17 @@ class AgentChildRefProjectionTest {
             public List<CapAgentDef> listLatestPerAgent(String tenantId) {
                 return List.copyOf(agents.values());
             }
-        };
+                @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraftGlobal(CapAgentDef def) {
+            return false;
+        }
+
+};
 
         final CapToolDefPort toolDefs = new CapToolDefPort() {
             @Override
@@ -377,7 +388,17 @@ class AgentChildRefProjectionTest {
             public List<CapToolDef> listAll() {
                 return List.of();
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapToolDef def) {
+            return false;
+        }
+
+};
 
         final CapSkillDefPort skillDefs = new CapSkillDefPort() {
             @Override
@@ -409,7 +430,17 @@ class AgentChildRefProjectionTest {
             public List<cn.studykid.multiagent.core.cap.CapSkillDef> listAll() {
                 return List.of();
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapSkillDef def) {
+            return false;
+        }
+
+};
 
         final CapMcpServerDefPort serverDefs = new CapMcpServerDefPort() {
             @Override
@@ -439,7 +470,17 @@ class AgentChildRefProjectionTest {
             public List<CapMcpServerDef> listAll() {
                 return List.of();
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapMcpServerDef def) {
+            return false;
+        }
+
+};
 
         final DecisionAuditPort audit = new DecisionAuditPort() {
             @Override

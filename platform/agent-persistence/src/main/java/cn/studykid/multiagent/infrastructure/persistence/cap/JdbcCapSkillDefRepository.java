@@ -4,6 +4,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -50,6 +51,11 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
             schema_version, created_at, published_at
             """;
 
+    /** SQL_PUBLISH_DRAFT：把未发布草稿行转正（WHERE 限定 published_at IS NULL）。 */
+    private static final String SQL_PUBLISH_DRAFT =
+            "UPDATE cap_skill_def SET published_at = ? " +
+            "WHERE id = ? AND version = ? AND published_at IS NULL";
+
     private static final String SQL_FIND = "SELECT " + COLUMNS
             + " FROM cap_skill_def WHERE id = ? AND version = ?";
 
@@ -86,6 +92,23 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
      */
     private static final String SQL_FIND_LATEST = "SELECT " + COLUMNS
             + " FROM cap_skill_def WHERE id = ? ORDER BY version DESC LIMIT 1";
+
+    /**
+     * 就地更新一条**未发布草稿**版本行（WHERE 带 published_at IS NULL）。
+     *
+     * <p>⚠️ 参数位次：1 name / 2 description / 3 purpose / 4 usage·jsonb / 5 content·text
+     * / 6 declared_tools·jsonb / 7 declared_mcp·jsonb / 8 risk_ceiling
+     * / 9 param_policies·jsonb / 10 required_caps·jsonb / 11 config_fingerprint
+     * / 12 updated_at / 13 id / 14 version。
+     */
+    private static final String SQL_UPDATE_DRAFT = """
+            UPDATE cap_skill_def
+            SET name = ?, description = ?, purpose = ?, usage = ?::jsonb, content = ?::text,
+                declared_tools = ?::jsonb, declared_mcp = ?::jsonb, risk_ceiling = ?,
+                param_policies = ?::jsonb, required_caps = ?::jsonb,
+                config_fingerprint = ?, updated_at = ?
+            WHERE id = ? AND version = ? AND published_at IS NULL
+            """;
 
     /**
      * 每个逻辑 id 的最高版本行（只读目录，见 {@link CapSkillDefPort#listAll()}）。
@@ -165,6 +188,56 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
     @Override
     public @NonNull Optional<CapSkillDef> findLatest(@NonNull String skillId) {
         return query(SQL_FIND_LATEST, ps -> ps.setString(1, skillId));
+    }
+
+    @Override
+    public boolean publishDraft(@NonNull String id, int version,
+                                         @NonNull Instant publishedAt) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_PUBLISH_DRAFT)) {
+                        ps.setTimestamp(1, Timestamp.from(publishedAt));
+                        ps.setString(2, id);
+                        ps.setInt(3, version);
+                        return ps.executeUpdate() > 0;
+                    }
+                });
+    }
+
+    @Override
+    public boolean updateDraft(@NonNull CapSkillDef def) {
+        String purpose = null;
+        String usageJson = null;
+        String content = null;
+        if (def.description() != null) {
+            purpose = def.description().purpose();
+            usageJson = toJson(def.description().usage());
+            content = def.description().content();
+        }
+        final String p1 = purpose;
+        final String p2 = usageJson;
+        final String p3 = content;
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_UPDATE_DRAFT)) {
+                        ps.setString(1, def.name());
+                        ps.setString(2, null); // 遗留单级描述列
+                        ps.setString(3, p1);
+                        ps.setString(4, p2);
+                        ps.setString(5, p3);
+                        ps.setString(6, toJson(def.declaredTools()));
+                        ps.setString(7, toJsonMcpDeclarations(def.declaredMcp()));
+                        ps.setString(8, def.riskCeiling().name());
+                        ps.setString(9, def.paramPolicies());
+                        ps.setString(10, toJson(def.requiredCaps()));
+                        ps.setString(11, def.configFingerprint());
+                        ps.setTimestamp(12, Timestamp.from(java.time.Instant.now()));
+                        ps.setString(13, def.id());
+                        ps.setInt(14, def.version());
+                        return ps.executeUpdate() > 0;
+                    }
+                });
     }
 
     private @NonNull Optional<CapSkillDef> query(@NonNull String sql,

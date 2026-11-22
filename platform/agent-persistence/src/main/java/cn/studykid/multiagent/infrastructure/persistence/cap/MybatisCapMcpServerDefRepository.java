@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.infrastructure.persistence.cap;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -114,6 +115,33 @@ public class MybatisCapMcpServerDefRepository implements CapMcpServerDefPort {
         return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
                 dataSource, platformContext(), conn -> mapper.findLatestPublished(serverId)
                         .map(MybatisCapMcpServerDefRepository::toRecord)));
+    }
+
+    @Override
+    public boolean publishDraft(@NonNull String id, int version,
+                                @NonNull Instant publishedAt) {
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn ->
+                        mapper.publishDraft(id, version, publishedAt) > 0));
+    }
+
+    public boolean updateDraft(@NonNull CapMcpServerDef def) {
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn -> mapper.updateDraft(
+                        def.id(),
+                        def.version(),
+                        def.transport().name().toLowerCase(java.util.Locale.ROOT),
+                        def.endpoint(),
+                        def.command(),
+                        def.authKind().name().toLowerCase(java.util.Locale.ROOT),
+                        def.trustTier().name().toLowerCase(java.util.Locale.ROOT),
+                        // ⚠️ null ≠ []（§4.4）：未配置与显式空清单语义不同
+                        def.exposedToolAllowlist() == null ? null : writeJson(def.exposedToolAllowlist()),
+                        def.connectionRisk().name(),
+                        def.dynamicDiscovery(),
+                        def.configFingerprint(),
+                        def.credentialRef(),
+                        java.time.Instant.now()) > 0));
     }
 
     @Override

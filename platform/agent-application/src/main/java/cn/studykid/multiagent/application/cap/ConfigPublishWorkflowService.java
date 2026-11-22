@@ -510,8 +510,63 @@ public class ConfigPublishWorkflowService {
         //    事后反查 cap_agent_def 会因目标版本被清理 / 再次变更而失真，
         //    客户端提交的「变更前」也没有证据价值（调用方自己写的）。
         String beforePayload = snapshotBefore(tenantId, payload);
+        // ⚠️ 变更**立即**产生版本行（草稿态，published_at = NULL）：
+        //    不等到发布才建版本 —— 否则「改了什么」在发布前根本无处可查，
+        //    变更记录也无法给出前后配置对比。版本号在这一刻定死。
+        materializeDraftVersions(tenantId, payload);
         return requests.insertWithBeforeSnapshot(
                 tenantId, payload.operation(), payload.toJson(), beforePayload, reason, requesterId);
+    }
+
+    /**
+     * 为本次变更<b>立即落一条草稿版本行</b>（{@code published_at = NULL}）。
+     *
+     * <p>⚠️ <b>为什么在申请时就建版本</b>：
+     * <ul>
+     *   <li>「改了什么」在发布前就该可查（变更记录 / 版本对比都依赖版本行）；</li>
+     *   <li>版本号在提交那一刻定死，后续审批、发布都不会再变号 ——
+     *       发布只做「转正」（写 published_at），不会 insert 新行。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>复用已有未发布草稿</b>（B②）：同对象反复编辑保存时，
+     * 若最高版本仍是未发布草稿，就<b>就地更新它</b>，不再新增版本号 ——
+     * 否则提交几次就堆出一串内容相近的空版本。只有当前最高版本已发布（或不存在）时，
+     * 才新建 {@code 最高版本 + 1} 的草稿。
+     *
+     * <p>⚠️ <b>失败不阻断申请</b>：写草稿是「尽量早留痕」的优化，
+     * 真出错时仍应让申请单正常落地（发布路径会回落到 insert 补建版本行）；
+     * 但必须记日志留痕。
+     */
+    private void materializeDraftVersions(@NonNull String tenantId,
+                                          @NonNull ConfigPublishPayload payload) {
+        if (payload.agents().isEmpty()) {
+            return;
+        }
+        Instant now = clock.instant();
+        try {
+            for (ConfigPublishPayload.AgentSpec spec : payload.agents()) {
+                CapAgentDef latest = agentDefs.findLatest(tenantId, spec.agentId()).orElse(null);
+                // 复用未发布草稿：最高版本就是草稿 → 就地更新，版本号不变
+                if (latest != null && latest.publishedAt() == null) {
+                    agentDefs.updateDraftGlobal(toAgentDef(spec, latest.version(), now));
+                    continue;
+                }
+                int version = (latest == null ? 0 : latest.version()) + 1;
+                agentDefs.insert(toAgentDef(spec, version, now));
+            }
+        } catch (RuntimeException e) {
+            log.warn("提交阶段落草稿版本行失败（不阻断申请，发布时会补建）：operation={}",
+                    payload.operation(), e);
+        }
+    }
+
+    /** 由草稿 spec 构造版本行（草稿态：published_at = NULL）。 */
+    private static CapAgentDef toAgentDef(ConfigPublishPayload.AgentSpec spec, int version,
+                                          Instant now) {
+        return new CapAgentDef(spec.agentId(), version, spec.name(), spec.description(),
+                spec.roles(), spec.enabledSkills(), spec.skillBundles(), spec.capabilityTags(),
+                spec.overrides(), spec.orchestration(), spec.instructions(),
+                spec.modelRef(), spec.generationParams(), "pending", 1, now, null);
     }
 
     /**

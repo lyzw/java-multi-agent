@@ -45,6 +45,11 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
             schema_version, created_at, published_at
             """;
 
+    /** SQL_PUBLISH_DRAFT：把未发布草稿行转正（WHERE 限定 published_at IS NULL）。 */
+    private static final String SQL_PUBLISH_DRAFT =
+            "UPDATE cap_tool_def SET published_at = ? " +
+            "WHERE id = ? AND version = ? AND published_at IS NULL";
+
     private static final String SQL_FIND = "SELECT " + COLUMNS
             + " FROM cap_tool_def WHERE id = ? AND version = ?";
 
@@ -103,6 +108,21 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
             + COLUMNS
             + " FROM cap_tool_def WHERE mcp_server_id = ?"
             + " ORDER BY mcp_tool_name, version DESC";
+
+    /**
+     * 就地更新一条**未发布草稿**版本行。
+     *
+     * <p>⚠️ WHERE 带 {@code published_at IS NULL}：已发布行不可变（DB 触发器同样拒改），
+     * 这里多一层条件让「改不到」表现为影响行数 0 而不是异常。
+     */
+    private static final String SQL_UPDATE_DRAFT = """
+            UPDATE cap_tool_def
+            SET name = ?, kind = ?, risk_level = ?, mcp_server_id = ?, mcp_tool_name = ?,
+                http_method = ?, http_url = ?, http_timeout_ms = ?,
+                input_schema = ?::jsonb, param_policies = ?::jsonb, description = ?,
+                config_fingerprint = ?, updated_at = ?
+            WHERE id = ? AND version = ? AND published_at IS NULL
+            """;
 
     /** 该 id 的全部版本行（不可变历史，按版本倒序 · 能力目录版本回溯用）。 */
     private static final String SQL_LIST_VERSIONS = "SELECT " + COLUMNS
@@ -169,6 +189,52 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
     @Override
     public @NonNull Optional<CapToolDef> findLatestPublished(@NonNull String toolId) {
         return query(SQL_FIND_LATEST_PUBLISHED, ps -> ps.setString(1, toolId));
+    }
+
+    @Override
+    public boolean publishDraft(@NonNull String id, int version,
+                                         @NonNull Instant publishedAt) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_PUBLISH_DRAFT)) {
+                        ps.setTimestamp(1, Timestamp.from(publishedAt));
+                        ps.setString(2, id);
+                        ps.setInt(3, version);
+                        return ps.executeUpdate() > 0;
+                    }
+                });
+    }
+
+    @Override
+    public boolean updateDraft(@NonNull CapToolDef def) {
+        CapHttpToolConfig http = def.httpConfig();
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_UPDATE_DRAFT)) {
+                        ps.setString(1, def.name());
+                        ps.setString(2, def.kind().name().toLowerCase(java.util.Locale.ROOT));
+                        ps.setString(3, def.riskLevel().name());
+                        ps.setString(4, def.mcpServerId());
+                        ps.setString(5, def.mcpToolName());
+                        ps.setString(6, http == null ? null : http.method());
+                        ps.setString(7, http == null ? null : http.url());
+                        if (http == null) {
+                            ps.setNull(8, java.sql.Types.INTEGER);
+                        } else {
+                            ps.setInt(8, http.timeoutMs());
+                        }
+                        ps.setString(9, def.inputSchema());
+                        ps.setString(10, def.paramPolicies());
+                        ps.setString(11, def.description());
+                        ps.setString(12, def.configFingerprint());
+                        // updated_at = 本次编辑时刻（created_at 保持首次落版本时间，不在此更新）
+                        ps.setTimestamp(13, Timestamp.from(java.time.Instant.now()));
+                        ps.setString(14, def.id());
+                        ps.setInt(15, def.version());
+                        return ps.executeUpdate() > 0;
+                    }
+                });
     }
 
     @Override

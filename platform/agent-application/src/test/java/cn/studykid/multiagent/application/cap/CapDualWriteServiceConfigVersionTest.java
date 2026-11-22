@@ -182,7 +182,17 @@ class CapDualWriteServiceConfigVersionTest {
         public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
             throw new UnsupportedOperationException();
         }
-    };
+            @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraftGlobal(CapAgentDef def) {
+            return false;
+        }
+
+};
 
     private static CapDualWriteService service(RecordingSnapshots snapshots,
                                                @Nullable ConfigPointerPort pointers) {

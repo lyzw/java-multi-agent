@@ -94,6 +94,14 @@ class WorkerChildAgentModelConfigProviderTest {
         public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
             return List.of();
         }
+        @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+        @Override
+        public boolean updateDraftGlobal(CapAgentDef def) {
+            return false;
+        }
 }
 
     /** 空闭包（工具表里除委派工具外什么都没有）。 */
@@ -156,6 +164,14 @@ class WorkerChildAgentModelConfigProviderTest {
         @Override
         public List<CapToolDef> listVersions(@NonNull String toolId) {
             return List.of();
+        }
+        @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+        @Override
+        public boolean updateDraft(CapToolDef def) {
+            return false;
         }
 }
 

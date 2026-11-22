@@ -462,7 +462,17 @@ class RoutingPolicyPublishFlowTest {
             public List<CapToolDef> listAll() {
                 return List.of();
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapToolDef def) {
+            return false;
+        }
+
+};
 
         final CapSkillDefPort skillDefs = new CapSkillDefPort() {
             @Override
@@ -492,7 +502,17 @@ class RoutingPolicyPublishFlowTest {
             public List<CapSkillDef> listAll() {
                 return List.of();
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapSkillDef def) {
+            return false;
+        }
+
+};
 
         final CapMcpServerDefPort serverDefs = new CapMcpServerDefPort() {
             @Override
@@ -522,7 +542,17 @@ class RoutingPolicyPublishFlowTest {
             public List<CapMcpServerDef> listAll() {
                 return List.of();
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapMcpServerDef def) {
+            return false;
+        }
+
+};
 
         final CapAgentDefPort agentDefs = new CapAgentDefPort() {
             @Override
@@ -561,7 +591,17 @@ class RoutingPolicyPublishFlowTest {
             public List<CapAgentDef> listLatestPerAgent(String tenantId) {
                 return List.copyOf(agents.values());
             }
-        };
+                @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraftGlobal(CapAgentDef def) {
+            return false;
+        }
+
+};
 
         final CapResultContractPort contracts = new CapResultContractPort() {
             @Override

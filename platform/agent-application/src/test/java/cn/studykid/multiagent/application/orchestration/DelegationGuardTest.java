@@ -320,7 +320,17 @@ class DelegationGuardTest {
             public @NonNull List<CapAgentDef> listLatestPerAgent(String tenantId) {
                 return List.of(def);
             }
-        };
+                @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraftGlobal(CapAgentDef def) {
+            return false;
+        }
+
+};
     }
 
     private static AuthorizationService authorization(boolean permitted) {

@@ -130,6 +130,14 @@ class RootAgentModelConfigProviderTest {
         public List<CapToolDef> listVersions(@NonNull String toolId) {
             return List.of();
         }
+        @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+        @Override
+        public boolean updateDraft(CapToolDef def) {
+            return false;
+        }
 }
 
     /** 委派工具装配器替身（按编排声明给不给委派工具）。 */

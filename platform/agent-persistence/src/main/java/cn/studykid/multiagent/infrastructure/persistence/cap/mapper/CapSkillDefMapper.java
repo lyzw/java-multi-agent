@@ -68,6 +68,27 @@ public interface CapSkillDefMapper extends BaseMapper<CapSkillDefDO> {
      */
     Optional<CapSkillDefDO> findLatest(@Param("id") String id);
 
+    /** SQL_PUBLISH_DRAFT：把未发布草稿行转正；返回影响行数（0 = 无草稿可转正）。 */
+    int publishDraft(@Param("id") String id,
+                     @Param("version") int version,
+                     @Param("publishedAt") Instant publishedAt);
+
+    /** SQL_UPDATE_DRAFT：仅更新未发布草稿行；返回影响行数（0 = 不存在或已发布）。 */
+    int updateDraft(@Param("id") String id,
+                    @Param("version") int version,
+                    @Param("name") @Nullable String name,
+                    @Param("description") @Nullable String description,
+                    @Param("purpose") @Nullable String purpose,
+                    @Param("usage") @Nullable String usage,
+                    @Param("content") @Nullable String content,
+                    @Param("declaredTools") String declaredTools,
+                    @Param("declaredMcp") String declaredMcp,
+                    @Param("riskCeiling") String riskCeiling,
+                    @Param("paramPolicies") String paramPolicies,
+                    @Param("requiredCaps") String requiredCaps,
+                    @Param("configFingerprint") String configFingerprint,
+                    @Param("updatedAt") Instant updatedAt);
+
     /** SQL_LIST_ALL：每个逻辑 id 的最高版本整行（DISTINCT ON (id)）。 */
     List<CapSkillDefDO> listAll();
 

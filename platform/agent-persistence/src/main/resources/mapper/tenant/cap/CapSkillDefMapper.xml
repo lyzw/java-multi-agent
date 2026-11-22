@@ -41,6 +41,41 @@
         ON CONFLICT (id, version) DO NOTHING
     </insert>
 
+    <!--
+      SQL_UPDATE_DRAFT：就地更新一条**未发布草稿**版本行。
+      ⚠️ WHERE 带 published_at IS NULL —— 已发布行不可变（DB 触发器拒改）。
+      ⚠️ 不更新 version / created_at。
+      ⚠️ 三级描述：description 列保持 NULL（遗留列），内容写 purpose/usage/content 三列。
+    -->
+    <!--
+      SQL_PUBLISH_DRAFT：把已存在的**未发布草稿**版本行转正（写 published_at）。
+      ⚠️ WHERE 带 published_at IS NULL —— 只转正草稿；影响行数 0 表示没有草稿可转正，
+         调用方应回落到 insert 路径（版本行在提交时不存在的老数据）。
+      ⚠️ DB 触发器对 OLD.published_at IS NULL 的行放行 UPDATE，因此「草稿 → 已发布」合法。
+    -->
+    <update id="publishDraft">
+        UPDATE cap_skill_def
+        SET published_at = #{publishedAt}
+        WHERE id = #{id} AND version = #{version} AND published_at IS NULL
+    </update>
+
+    <update id="updateDraft">
+        UPDATE cap_skill_def
+        SET name = #{name},
+            description = #{description},
+            purpose = #{purpose},
+            usage = #{usage}::jsonb,
+            content = #{content}::text,
+            declared_tools = #{declaredTools}::jsonb,
+            declared_mcp = #{declaredMcp}::jsonb,
+            risk_ceiling = #{riskCeiling},
+            param_policies = #{paramPolicies}::jsonb,
+            required_caps = #{requiredCaps}::jsonb,
+            config_fingerprint = #{configFingerprint},
+            updated_at = #{updatedAt}
+        WHERE id = #{id} AND version = #{version} AND published_at IS NULL
+    </update>
+
     <!-- SQL_FIND -->
     <select id="find" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapSkillDefDO">
         <include refid="selectColumns"/>

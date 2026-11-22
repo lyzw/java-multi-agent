@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.worker.execute;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -82,5 +83,13 @@ final class ScriptedAgentDefPort implements CapAgentDefPort {
         @Override
         public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
             return List.of();
+        }
+        @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+        @Override
+        public boolean updateDraftGlobal(CapAgentDef def) {
+            return false;
         }
 }

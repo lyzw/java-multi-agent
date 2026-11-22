@@ -47,6 +47,11 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
 
     private static final String GLOBAL_CONTEXT_TENANT = "00000000-0000-0000-0000-000000000000";
 
+    /** SQL_PUBLISH_DRAFT：把未发布草稿行转正（WHERE 限定 published_at IS NULL）。 */
+    private static final String SQL_PUBLISH_DRAFT =
+            "UPDATE cap_agent_def SET published_at = ? " +
+            "WHERE agent_id = ?::uuid AND version = ? AND published_at IS NULL";
+
     private static final String SQL_INSERT = """
             INSERT INTO cap_agent_def
                 (agent_id, version, name, description, roles, enabled_skills,
@@ -56,6 +61,26 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
             VALUES (?::uuid, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb,
                     ?::jsonb, ?::jsonb, ?::jsonb, ?, ?::jsonb, ?, ?, ?, ?, ?)
             ON CONFLICT (agent_id, version) DO NOTHING
+            """;
+
+    /**
+     * 就地更新一条**未发布草稿**版本行（全局口径，不按租户绑定过滤）。
+     *
+     * <p>⚠️ WHERE 带 {@code published_at IS NULL}：已发布行不可变（DB 触发器拒改）。
+     * <p>⚠️ 不更新 version / created_at。
+     * <p>⚠️ 参数位次：1 name / 2 description / 3 roles·jsonb / 4 enabled_skills·jsonb
+     * / 5 skill_bundles·jsonb / 6 capability_tags·jsonb / 7 overrides·jsonb
+     * / 8 orchestration·jsonb / 9 instructions·jsonb / 10 model_ref
+     * / 11 generation_params·jsonb / 12 config_fingerprint / 13 updated_at
+     * / 14 agent_id / 15 version。
+     */
+    private static final String SQL_UPDATE_DRAFT = """
+            UPDATE cap_agent_def
+            SET name = ?, description = ?, roles = ?::jsonb, enabled_skills = ?::jsonb,
+                skill_bundles = ?::jsonb, capability_tags = ?::jsonb, overrides = ?::jsonb,
+                orchestration = ?::jsonb, instructions = ?::jsonb, model_ref = ?,
+                generation_params = ?::jsonb, config_fingerprint = ?, updated_at = ?
+            WHERE agent_id = ?::uuid AND version = ? AND published_at IS NULL
             """;
 
     private static final String SQL_FIND = """
@@ -213,6 +238,47 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
                         } else {
                             ps.setTimestamp(18, Timestamp.from(def.publishedAt()));
                         }
+                        return ps.executeUpdate() > 0;
+                    }
+                });
+    }
+
+    @Override
+    public boolean publishDraftGlobal(@NonNull String agentId, int version,
+                                         @NonNull Instant publishedAt) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(GLOBAL_CONTEXT_TENANT),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_PUBLISH_DRAFT)) {
+                        ps.setTimestamp(1, Timestamp.from(publishedAt));
+                        ps.setString(2, agentId);
+                        ps.setInt(3, version);
+                        return ps.executeUpdate() > 0;
+                    }
+                });
+    }
+
+    @Override
+    public boolean updateDraftGlobal(@NonNull CapAgentDef def) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(GLOBAL_CONTEXT_TENANT),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_UPDATE_DRAFT)) {
+                        ps.setString(1, def.name());
+                        ps.setString(2, def.description());
+                        ps.setString(3, toJson(def.roles()));
+                        ps.setString(4, toJson(def.enabledSkills()));
+                        ps.setString(5, toJson(def.skillBundles()));
+                        ps.setString(6, toJson(def.capabilityTags()));
+                        ps.setString(7, def.overrides());
+                        ps.setString(8, def.orchestration());
+                        ps.setString(9, def.instructions());
+                        ps.setString(10, def.modelRef());
+                        ps.setString(11, def.generationParams());
+                        ps.setString(12, def.configFingerprint());
+                        ps.setTimestamp(13, Timestamp.from(java.time.Instant.now()));
+                        ps.setString(14, def.agentId());
+                        ps.setInt(15, def.version());
                         return ps.executeUpdate() > 0;
                     }
                 });

@@ -126,6 +126,41 @@
       SQL_LIST_VERSIONS_GLOBAL：该 Agent 的全部版本行，无绑定过滤，按版本倒序
       （能力目录版本回溯用；与 findLatestGlobal 同口径 —— 全局 Agent 可尚未分配任何租户）。
     -->
+    <!--
+      SQL_UPDATE_DRAFT：就地更新一条**未发布草稿**版本行（全局口径，无绑定过滤）。
+      ⚠️ WHERE 带 published_at IS NULL —— 已发布行不可变（DB 触发器拒改）。
+      ⚠️ 不更新 version / created_at：版本号是身份，创建时间是首版时刻。
+    -->
+    <!--
+      SQL_PUBLISH_DRAFT：把已存在的**未发布草稿**版本行转正（写 published_at）。
+      ⚠️ WHERE 带 published_at IS NULL —— 只转正草稿；影响行数 0 表示没有草稿可转正，
+         调用方应回落到 insert 路径（版本行在提交时不存在的老数据）。
+      ⚠️ DB 触发器对 OLD.published_at IS NULL 的行放行 UPDATE，因此「草稿 → 已发布」合法。
+    -->
+    <update id="publishDraft">
+        UPDATE cap_agent_def
+        SET published_at = #{publishedAt}
+        WHERE agent_id = #{agentId}::uuid AND version = #{version} AND published_at IS NULL
+    </update>
+
+    <update id="updateDraft">
+        UPDATE cap_agent_def
+        SET name = #{name},
+            description = #{description},
+            roles = #{roles}::jsonb,
+            enabled_skills = #{enabledSkills}::jsonb,
+            skill_bundles = #{skillBundles}::jsonb,
+            capability_tags = #{capabilityTags}::jsonb,
+            overrides = #{overrides}::jsonb,
+            orchestration = #{orchestration}::jsonb,
+            instructions = #{instructions}::jsonb,
+            model_ref = #{modelRef},
+            generation_params = #{generationParams}::jsonb,
+            config_fingerprint = #{configFingerprint},
+            updated_at = #{updatedAt}
+        WHERE agent_id = #{agentId}::uuid AND version = #{version} AND published_at IS NULL
+    </update>
+
     <select id="listVersionsGlobal" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapAgentDefDO">
         <include refid="selectColumns"/>
         WHERE d.agent_id = #{agentId}::uuid

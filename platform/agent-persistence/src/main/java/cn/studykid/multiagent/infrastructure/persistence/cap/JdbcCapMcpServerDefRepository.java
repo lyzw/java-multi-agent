@@ -4,6 +4,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -52,6 +53,11 @@ public class JdbcCapMcpServerDefRepository implements CapMcpServerDefPort {
             config_fingerprint, credential_ref, schema_version, created_at, published_at
             """;
 
+    /** SQL_PUBLISH_DRAFT：把未发布草稿行转正（WHERE 限定 published_at IS NULL）。 */
+    private static final String SQL_PUBLISH_DRAFT =
+            "UPDATE cap_mcp_server_def SET published_at = ? " +
+            "WHERE id = ? AND version = ? AND published_at IS NULL";
+
     private static final String SQL_FIND = "SELECT " + COLUMNS
             + " FROM cap_mcp_server_def WHERE id = ? AND version = ?";
 
@@ -83,6 +89,21 @@ public class JdbcCapMcpServerDefRepository implements CapMcpServerDefPort {
      */
     private static final String SQL_FIND_LATEST = "SELECT " + COLUMNS
             + " FROM cap_mcp_server_def WHERE id = ? ORDER BY version DESC LIMIT 1";
+
+    /**
+     * 就地更新一条**未发布草稿**版本行（WHERE 带 published_at IS NULL）。
+     *
+     * <p>⚠️ 参数位次：1 transport / 2 endpoint / 3 command / 4 auth_kind / 5 trust_tier
+     * / 6 exposed_tool_allowlist·jsonb / 7 connection_risk / 8 dynamic_discovery
+     * / 9 config_fingerprint / 10 credential_ref / 11 updated_at / 12 id / 13 version。
+     */
+    private static final String SQL_UPDATE_DRAFT = """
+            UPDATE cap_mcp_server_def
+            SET transport = ?, endpoint = ?, command = ?, auth_kind = ?, trust_tier = ?,
+                exposed_tool_allowlist = ?::jsonb, connection_risk = ?, dynamic_discovery = ?,
+                config_fingerprint = ?, credential_ref = ?, updated_at = ?
+            WHERE id = ? AND version = ? AND published_at IS NULL
+            """;
 
     /**
      * 列出全部 MCP Server 定义（各逻辑 id 的最高版本行）。
@@ -155,6 +176,45 @@ public class JdbcCapMcpServerDefRepository implements CapMcpServerDefPort {
     @Override
     public @NonNull Optional<CapMcpServerDef> findLatestPublished(@NonNull String serverId) {
         return query(SQL_FIND_LATEST_PUBLISHED, ps -> ps.setString(1, serverId));
+    }
+
+    @Override
+    public boolean publishDraft(@NonNull String id, int version,
+                                         @NonNull Instant publishedAt) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_PUBLISH_DRAFT)) {
+                        ps.setTimestamp(1, Timestamp.from(publishedAt));
+                        ps.setString(2, id);
+                        ps.setInt(3, version);
+                        return ps.executeUpdate() > 0;
+                    }
+                });
+    }
+
+    @Override
+    public boolean updateDraft(@NonNull CapMcpServerDef def) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_UPDATE_DRAFT)) {
+                        ps.setString(1, def.transport().name().toLowerCase(java.util.Locale.ROOT));
+                        ps.setString(2, def.endpoint());
+                        ps.setString(3, def.command());
+                        ps.setString(4, def.authKind().name().toLowerCase(java.util.Locale.ROOT));
+                        ps.setString(5, def.trustTier().name().toLowerCase(java.util.Locale.ROOT));
+                        ps.setString(6, def.exposedToolAllowlist() == null
+                                ? null : writeJson(def.exposedToolAllowlist()));
+                        ps.setString(7, def.connectionRisk().name());
+                        ps.setBoolean(8, def.dynamicDiscovery());
+                        ps.setString(9, def.configFingerprint());
+                        ps.setString(10, def.credentialRef());
+                        ps.setTimestamp(11, Timestamp.from(java.time.Instant.now()));
+                        ps.setString(12, def.id());
+                        ps.setInt(13, def.version());
+                        return ps.executeUpdate() > 0;
+                    }
+                });
     }
 
     @Override

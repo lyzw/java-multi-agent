@@ -62,6 +62,26 @@ public interface CapMcpServerDefMapper extends BaseMapper<CapMcpServerDefDO> {
      */
     Optional<CapMcpServerDefDO> findLatest(@Param("id") String id);
 
+    /** SQL_PUBLISH_DRAFT：把未发布草稿行转正；返回影响行数（0 = 无草稿可转正）。 */
+    int publishDraft(@Param("id") String id,
+                     @Param("version") int version,
+                     @Param("publishedAt") Instant publishedAt);
+
+    /** SQL_UPDATE_DRAFT：仅更新未发布草稿行；返回影响行数（0 = 不存在或已发布）。 */
+    int updateDraft(@Param("id") String id,
+                    @Param("version") int version,
+                    @Param("transport") String transport,
+                    @Param("endpoint") @Nullable String endpoint,
+                    @Param("command") @Nullable String command,
+                    @Param("authKind") String authKind,
+                    @Param("trustTier") String trustTier,
+                    @Param("exposedToolAllowlist") @Nullable String exposedToolAllowlist,
+                    @Param("connectionRisk") String connectionRisk,
+                    @Param("dynamicDiscovery") boolean dynamicDiscovery,
+                    @Param("configFingerprint") String configFingerprint,
+                    @Param("credentialRef") @Nullable String credentialRef,
+                    @Param("updatedAt") Instant updatedAt);
+
     /** SQL_LIST_ALL：各逻辑 id 的最高版本行，按 id 升序。 */
     List<CapMcpServerDefDO> listAll();
 

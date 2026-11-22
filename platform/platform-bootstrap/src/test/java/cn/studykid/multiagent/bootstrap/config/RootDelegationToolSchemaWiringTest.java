@@ -112,6 +112,14 @@ class RootDelegationToolSchemaWiringTest {
         public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
             return List.of();
         }
+        @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+        @Override
+        public boolean updateDraftGlobal(CapAgentDef def) {
+            return false;
+        }
 }
 
     /** 可编程的能力快照仓储替身。 */
@@ -213,6 +221,17 @@ class RootDelegationToolSchemaWiringTest {
                                     public @NonNull List<CapToolDef>
                                             listVersions(@NonNull String toolId) {
                                         return List.of();
+                                    }
+
+                                    @Override
+                                    public boolean publishDraft(@NonNull String id, int version,
+                                                                @NonNull Instant publishedAt) {
+                                        return false;
+                                    }
+
+                                    @Override
+                                    public boolean updateDraft(@NonNull CapToolDef def) {
+                                        return false;
                                     }
 }),
                         new cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler(defs)));

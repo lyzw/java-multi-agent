@@ -1,6 +1,7 @@
 package cn.studykid.multiagent.worker.execute;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -88,6 +89,14 @@ class AgentModelConfigAssemblerTest {
         public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
             return List.of();
         }
+        @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+        @Override
+        public boolean updateDraftGlobal(CapAgentDef def) {
+            return false;
+        }
 }
 
     /** 闭包替身：可指定该 Agent 自己的工具绑定与 Skill 绑定（含两级描述）。 */
@@ -163,6 +172,14 @@ class AgentModelConfigAssemblerTest {
         @Override
         public List<CapToolDef> listVersions(@NonNull String toolId) {
             return List.of();
+        }
+        @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+        @Override
+        public boolean updateDraft(CapToolDef def) {
+            return false;
         }
 }
 

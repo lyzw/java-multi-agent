@@ -587,7 +587,17 @@ final class CapFixture {
                         .filter(a -> agentId.equals(a.agentId()))
                         .max((a, b) -> Integer.compare(a.version(), b.version()));
             }
-        };
+                @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraftGlobal(CapAgentDef def) {
+            return false;
+        }
+
+};
     }
 
     @NonNull CapResultContractPort resultContracts() {
@@ -657,7 +667,17 @@ final class CapFixture {
             public @NonNull List<CapSkillDef> listAll() {
                 return latestPerId(skills);
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapSkillDef def) {
+            return false;
+        }
+
+};
     }
 
     @NonNull CapToolDefPort toolDefs() {
@@ -707,7 +727,17 @@ final class CapFixture {
             public @NonNull List<CapToolDef> listAll() {
                 return latestPerId(tools);
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapToolDef def) {
+            return false;
+        }
+
+};
     }
 
     @NonNull CapMcpServerDefPort serverDefs() {
@@ -739,7 +769,17 @@ final class CapFixture {
             public java.util.List<CapMcpServerDef> listAll() {
                 return java.util.List.copyOf(servers.values());
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapMcpServerDef def) {
+            return false;
+        }
+
+};
     }
 
     @NonNull PublishedVersionPort publishedVersions() {

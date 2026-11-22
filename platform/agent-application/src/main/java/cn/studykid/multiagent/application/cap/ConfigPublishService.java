@@ -392,6 +392,13 @@ public class ConfigPublishService {
         //        绝不把别人的内容当成自己的发出去。
         for (CapToolDef tool : command.tools()) {
             CapToolDef published = withPublished(tool, now);
+            // ⚠️ 版本行在**提交申请时**就以草稿形态落库了（版本号那一刻定死），
+            //    发布只是把它「转正」。若这里仍走 insert，会因
+            //    ON CONFLICT DO NOTHING 变成静默 no-op，而发布却报成功（假成功）。
+            //    只有转正失败（老数据：提交时没有草稿行）才回落到 insert。
+            if (toolDefs.publishDraft(published.id(), published.version(), now)) {
+                continue;
+            }
             if (!toolDefs.insert(published)) {
                 verifySameContentOnConflict("tool", tool.id(), tool.version(),
                         published.configFingerprint(),
@@ -400,6 +407,10 @@ public class ConfigPublishService {
         }
         for (CapSkillDef skill : command.skills()) {
             CapSkillDef published = withPublished(skill, now);
+            // 同 tool：先转正草稿，转正不到（老数据）才 insert。
+            if (skillDefs.publishDraft(published.id(), published.version(), now)) {
+                continue;
+            }
             if (!skillDefs.insert(published)) {
                 verifySameContentOnConflict("skill", skill.id(), skill.version(),
                         published.configFingerprint(),
@@ -408,6 +419,10 @@ public class ConfigPublishService {
         }
         for (CapMcpServerDef server : command.mcpServers()) {
             CapMcpServerDef published = withPublished(server, now);
+            // 同 tool：先转正草稿，转正不到（老数据）才 insert。
+            if (serverDefs.publishDraft(published.id(), published.version(), now)) {
+                continue;
+            }
             if (!serverDefs.insert(published)) {
                 verifySameContentOnConflict("mcp_server", server.id(), server.version(),
                         published.configFingerprint(),
@@ -457,7 +472,11 @@ public class ConfigPublishService {
         }
         for (CapAgentDef agent : command.agents()) {
             CapAgentDef published = withPublished(agent, now);
-            if (!agentDefs.insert(published)) {
+            // 同 tool：先转正草稿，转正不到（老数据）才 insert。
+            // ⚠️ Agent 的归档（cap_agent_def → agent_version）在其后照旧执行，
+            //    转正与否都要归档，故这里只决定「版本行怎么落」。
+            if (!agentDefs.publishDraftGlobal(published.agentId(), published.version(), now)
+                    && !agentDefs.insert(published)) {
                 verifySameContentOnConflict("agent", agent.agentId(), agent.version(),
                         published.configFingerprint(),
                         agentDefs.find(command.tenantId(), agent.agentId(), agent.version())

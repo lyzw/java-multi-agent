@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.infrastructure.persistence.cap;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -108,6 +109,35 @@ public class MybatisCapToolDefRepository implements CapToolDefPort {
         return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
                 dataSource, platformContext(), conn -> mapper.findLatestPublished(toolId)
                         .map(MybatisCapToolDefRepository::toRecord)));
+    }
+
+    @Override
+    public boolean publishDraft(@NonNull String id, int version,
+                                @NonNull Instant publishedAt) {
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn ->
+                        mapper.publishDraft(id, version, publishedAt) > 0));
+    }
+
+    public boolean updateDraft(@NonNull CapToolDef def) {
+        CapHttpToolConfig http = def.httpConfig();
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn -> mapper.updateDraft(
+                        def.id(),
+                        def.version(),
+                        def.name(),
+                        def.kind().name().toLowerCase(java.util.Locale.ROOT),
+                        def.riskLevel().name(),
+                        def.mcpServerId(),
+                        def.mcpToolName(),
+                        http == null ? null : http.method(),
+                        http == null ? null : http.url(),
+                        http == null ? null : http.timeoutMs(),
+                        def.inputSchema(),
+                        def.paramPolicies(),
+                        def.description(),
+                        def.configFingerprint(),
+                        java.time.Instant.now()) > 0));
     }
 
     @Override

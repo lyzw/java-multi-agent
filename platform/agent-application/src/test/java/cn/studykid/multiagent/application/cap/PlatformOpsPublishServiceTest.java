@@ -274,7 +274,17 @@ class PlatformOpsPublishServiceTest {
             public List<CapToolDef> listAll() {
                 throw new UnsupportedOperationException("闸门路径不应触达 Tool 端口");
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapToolDef def) {
+            return false;
+        }
+
+};
     }
 
     private static CapSkillDefPort unusedSkills() {
@@ -306,7 +316,17 @@ class PlatformOpsPublishServiceTest {
             public List<CapSkillDef> listAll() {
                 throw new UnsupportedOperationException("闸门路径不应触达 Skill 端口");
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapSkillDef def) {
+            return false;
+        }
+
+};
     }
 
     private static CapMcpServerDefPort unusedServers() {
@@ -338,7 +358,17 @@ class PlatformOpsPublishServiceTest {
             public java.util.List<CapMcpServerDef> listAll() {
                 throw new UnsupportedOperationException("闸门路径不应触达 MCP Server 端口");
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapMcpServerDef def) {
+            return false;
+        }
+
+};
     }
 
     private static CapAgentDefPort unusedAgents() {
@@ -371,7 +401,17 @@ class PlatformOpsPublishServiceTest {
             public java.util.List<CapAgentDef> listLatestPerAgent(String tenantId) {
                 throw new UnsupportedOperationException("闸门路径不应触达 Agent 端口");
             }
-        };
+                @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraftGlobal(CapAgentDef def) {
+            return false;
+        }
+
+};
     }
 
     private static DecisionAuditPort unusedAudit() {

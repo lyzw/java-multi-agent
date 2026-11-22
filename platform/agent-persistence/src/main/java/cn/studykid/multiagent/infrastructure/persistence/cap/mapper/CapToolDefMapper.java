@@ -62,6 +62,28 @@ public interface CapToolDefMapper extends BaseMapper<CapToolDefDO> {
      */
     Optional<CapToolDefDO> findLatest(@Param("id") String id);
 
+    /** SQL_PUBLISH_DRAFT：把未发布草稿行转正；返回影响行数（0 = 无草稿可转正）。 */
+    int publishDraft(@Param("id") String id,
+                     @Param("version") int version,
+                     @Param("publishedAt") Instant publishedAt);
+
+    /** SQL_UPDATE_DRAFT：仅更新未发布草稿行；返回影响行数（0 = 不存在或已发布）。 */
+    int updateDraft(@Param("id") String id,
+                    @Param("version") int version,
+                    @Param("name") @Nullable String name,
+                    @Param("kind") String kind,
+                    @Param("riskLevel") String riskLevel,
+                    @Param("mcpServerId") @Nullable String mcpServerId,
+                    @Param("mcpToolName") @Nullable String mcpToolName,
+                    @Param("httpMethod") @Nullable String httpMethod,
+                    @Param("httpUrl") @Nullable String httpUrl,
+                    @Param("httpTimeoutMs") @Nullable Integer httpTimeoutMs,
+                    @Param("inputSchema") String inputSchema,
+                    @Param("paramPolicies") String paramPolicies,
+                    @Param("description") @Nullable String description,
+                    @Param("configFingerprint") String configFingerprint,
+                    @Param("updatedAt") Instant updatedAt);
+
     /** SQL_FIND_BY_MCP_BINDING：按 mcp_server_id + mcp_tool_name 反查最新已发布版本。 */
     Optional<CapToolDefDO> findByMcpBinding(@Param("mcpServerId") String mcpServerId,
                                             @Param("mcpToolName") String mcpToolName);

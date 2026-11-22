@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.infrastructure.persistence.cap;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -125,6 +126,44 @@ public class MybatisCapSkillDefRepository implements CapSkillDefPort {
         return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
                 dataSource, platformContext(), conn -> mapper.findLatestPublished(skillId)
                         .map(MybatisCapSkillDefRepository::toRecord)));
+    }
+
+    @Override
+    public boolean publishDraft(@NonNull String id, int version,
+                                @NonNull Instant publishedAt) {
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn ->
+                        mapper.publishDraft(id, version, publishedAt) > 0));
+    }
+
+    public boolean updateDraft(@NonNull CapSkillDef def) {
+        String purpose = null;
+        String usageJson = null;
+        String content = null;
+        if (def.description() != null) {
+            purpose = def.description().purpose();
+            usageJson = toJson(def.description().usage());
+            content = def.description().content();
+        }
+        final String p1 = purpose;
+        final String p2 = usageJson;
+        final String p3 = content;
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn -> mapper.updateDraft(
+                        def.id(),
+                        def.version(),
+                        def.name(),
+                        null, // description：遗留单级描述列，保持 NULL
+                        p1,
+                        p2,
+                        p3,
+                        toJson(def.declaredTools()),
+                        toJsonMcpDeclarations(def.declaredMcp()),
+                        def.riskCeiling().name(),
+                        def.paramPolicies(),
+                        toJson(def.requiredCaps()),
+                        def.configFingerprint(),
+                        java.time.Instant.now()) > 0));
     }
 
     @Override

@@ -15,6 +15,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import cn.studykid.multiagent.core.cap.CapMcpServerDef;
 import cn.studykid.multiagent.core.cap.CapSkillDef;
 import cn.studykid.multiagent.core.cap.CapToolDef;
 import cn.studykid.multiagent.core.cap.CapToolKind;
@@ -357,7 +358,17 @@ class ConfigPublishServiceTest {
             public List<CapToolDef> listAll() {
                 return List.copyOf(tools.values());
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapToolDef def) {
+            return false;
+        }
+
+};
         final CapSkillDefPort skillDefs = new CapSkillDefPort() {
             @Override
             public Optional<cn.studykid.multiagent.core.cap.CapSkillDef> findLatest(String skillId) {
@@ -392,7 +403,17 @@ class ConfigPublishServiceTest {
             public List<CapSkillDef> listAll() {
                 return List.copyOf(skills.values());
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(CapSkillDef def) {
+            return false;
+        }
+
+};
         final CapMcpServerDefPort serverDefs = new CapMcpServerDefPort() {
             @Override
             public Optional<cn.studykid.multiagent.core.cap.CapMcpServerDef> findLatest(String serverId) {
@@ -423,7 +444,17 @@ class ConfigPublishServiceTest {
             public java.util.List<cn.studykid.multiagent.core.cap.CapMcpServerDef> listAll() {
                 return java.util.List.of();
             }
-        };
+                @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraft(cn.studykid.multiagent.core.cap.CapMcpServerDef def) {
+            return false;
+        }
+
+};
         final CapAgentDefPort agentDefs = new CapAgentDefPort() {
             @Override
             public List<cn.studykid.multiagent.core.cap.CapAgentDef> listVersionsGlobal(String agentId) {
@@ -458,7 +489,17 @@ class ConfigPublishServiceTest {
                     String tenantId) {
                 return java.util.List.of();
             }
-        };
+                @Override
+        public boolean publishDraftGlobal(String agentId, int version, Instant publishedAt) {
+            return false;
+        }
+
+        @Override
+        public boolean updateDraftGlobal(cn.studykid.multiagent.core.cap.CapAgentDef def) {
+            return false;
+        }
+
+};
     }
 
     private static final class FakePointer implements ConfigPointerPort {

@@ -71,6 +71,32 @@ public interface CapAgentDefMapper extends BaseMapper<CapAgentDefDO> {
     /** SQL_LIST_LATEST_PER_AGENT：每个已绑定 Agent 一行的最高版本，按 agent_id 升序。 */
     List<CapAgentDefDO> listLatestPerAgent(@Param("tenantId") String tenantId);
 
+    /** SQL_PUBLISH_DRAFT：把未发布草稿行转正；返回影响行数（0 = 无草稿可转正）。 */
+    int publishDraft(@Param("agentId") String agentId,
+                     @Param("version") int version,
+                     @Param("publishedAt") Instant publishedAt);
+
+    /**
+     * SQL_UPDATE_DRAFT：仅更新未发布草稿行（全局口径，无绑定过滤）。
+     *
+     * @return 影响行数；0 = 目标行不存在或已发布
+     */
+    int updateDraft(@Param("agentId") String agentId,
+                    @Param("version") int version,
+                    @Param("name") @Nullable String name,
+                    @Param("description") @Nullable String description,
+                    @Param("roles") String roles,
+                    @Param("enabledSkills") String enabledSkills,
+                    @Param("skillBundles") String skillBundles,
+                    @Param("capabilityTags") String capabilityTags,
+                    @Param("overrides") String overrides,
+                    @Param("orchestration") String orchestration,
+                    @Param("instructions") String instructions,
+                    @Param("modelRef") @Nullable String modelRef,
+                    @Param("generationParams") String generationParams,
+                    @Param("configFingerprint") String configFingerprint,
+                    @Param("updatedAt") Instant updatedAt);
+
     /** SQL_LIST_VERSIONS_GLOBAL：该 Agent 的全部版本行，无绑定过滤，按版本倒序（能力目录版本回溯用）。 */
     List<CapAgentDefDO> listVersionsGlobal(@Param("agentId") String agentId);
 }

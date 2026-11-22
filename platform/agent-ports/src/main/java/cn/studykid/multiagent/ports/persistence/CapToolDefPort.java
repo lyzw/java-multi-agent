@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.ports.persistence;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -68,6 +69,41 @@ public interface CapToolDefPort {
      * @return 最高版本行；无任何版本时为 {@link Optional#empty()}
      */
     @NonNull Optional<CapToolDef> findLatest(@NonNull String toolId);
+
+    /**
+     * 就地更新一条<b>未发布草稿</b>版本行（草稿编辑 · 版本管理机制）。
+     *
+     * <p>⚠️ <b>只允许更新未发布行</b>：实现必须以
+     * {@code WHERE published_at IS NULL} 作为更新条件，影响行数为 0 即视为失败 ——
+     * 已发布版本是线上生效过的不可变历史（DB 触发器同样封禁），
+     * 若这里放行，一次「重新提交」就能静默改掉线上配置。
+     *
+     * <p>⚠️ <b>只改内容列，不改版本号与创建时间</b>：版本号是身份，
+     * 创建时间记录首次落版本的时刻；本次编辑时间由 updated_at 承载。
+     *
+     * @param def 新的草稿内容（version 与 id 用于定位）
+     * @return {@code true} = 确有未发布行被更新；{@code false} = 目标行不存在或已发布
+     */
+    boolean updateDraft(@NonNull CapToolDef def);
+
+    /**
+     * 把一条已存在的<b>未发布草稿</b>版本行转正（写入 published_at）。
+     *
+     * <p>⚠️ <b>为什么需要它</b>：变更提交时版本行就以草稿形态落库了
+     * （版本号在那一刻定死），发布只是把这一版「转正」——
+     * 若这里再 insert 一次，会因为 ON CONFLICT DO NOTHING 变成静默 no-op，
+     * 而发布却报成功（假成功）。
+     *
+     * <p>⚠️ <b>只允许转正未发布行</b>：实现必须以
+     * WHERE published_at IS NULL 作为更新条件。影响行数 0 表示目标行不存在或已发布
+     * —— 调用方据此回落到 insert 路径。
+     *
+     * @param id          对象逻辑 id
+     * @param version     版本号
+     * @param publishedAt 发布时间
+     * @return true = 确有草稿行被转正
+     */
+    boolean publishDraft(@NonNull String id, int version, @NonNull Instant publishedAt);
 
     /**
      * 按 MCP 绑定关系查找工具定义（{@code mcp_server_id + mcp_tool_name}）。

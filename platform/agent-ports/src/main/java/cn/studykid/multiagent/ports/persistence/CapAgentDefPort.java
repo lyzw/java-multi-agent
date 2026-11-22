@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.ports.persistence;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -54,6 +55,35 @@ public interface CapAgentDefPort {
     default @NonNull Optional<CapAgentDef> findLatestGlobal(@NonNull String agentId) {
         return findLatest("00000000-0000-0000-0000-000000000000", agentId);
     }
+
+    /**
+     * 就地更新一条<b>未发布草稿</b>版本行（草稿编辑 · 版本管理机制）。
+     *
+     * <p>⚠️ <b>只允许更新未发布行</b>：实现必须以
+     * {@code WHERE published_at IS NULL} 作为更新条件，影响行数为 0 即视为失败 ——
+     * 已发布版本是线上生效过的不可变历史（DB 触发器同样封禁）。
+     *
+     * <p>⚠️ <b>全局口径</b>（不按租户绑定过滤）：与 {@link #findLatestGlobal} 同理 ——
+     * 草稿行可能属于尚未绑定任何租户的全局 Agent，按绑定过滤会永远更新不到。
+     *
+     * @param def 新的草稿内容（agentId + version 用于定位）
+     * @return {@code true} = 确有未发布行被更新；{@code false} = 目标行不存在或已发布
+     */
+    boolean updateDraftGlobal(@NonNull CapAgentDef def);
+
+    /**
+     * 把一条已存在的<b>未发布草稿</b>版本行转正（写入 published_at，全局口径）。
+     *
+     * <p>⚠️ 同 CapToolDefPort#publishDraft：变更提交时版本行已以草稿形态落库，
+     * 发布只是把这一版转正；再 insert 会因 ON CONFLICT DO NOTHING 静默 no-op。
+     *
+     * @param agentId     Agent 标识
+     * @param version     版本号
+     * @param publishedAt 发布时间
+     * @return true = 确有草稿行被转正
+     */
+    boolean publishDraftGlobal(@NonNull String agentId, int version,
+                               @NonNull Instant publishedAt);
 
     /**
      * 读取<b>最新已发布</b>版本行（按 version 倒序取第一行，<b>按发布状态过滤</b>）。

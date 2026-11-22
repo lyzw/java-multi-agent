@@ -183,6 +183,14 @@ class AgentModelConfigAssemblerCatalogResolutionTest {
         public List<CapToolDef> listVersions(@NonNull String toolId) {
             return List.of();
         }
+        @Override
+        public boolean publishDraft(String id, int version, Instant publishedAt) {
+            return false;
+        }
+        @Override
+        public boolean updateDraft(CapToolDef def) {
+            return false;
+        }
 }
 
     private static final class StubCatalogPort implements ModelCatalogPort {
