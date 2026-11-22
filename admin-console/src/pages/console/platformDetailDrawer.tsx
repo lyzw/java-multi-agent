@@ -14,8 +14,9 @@
  * 元数据请求（{@code /agents/{id}/changes}），仍不含定义正文。
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Alert, Descriptions, Divider, Drawer, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Alert, Descriptions, Divider, Drawer, Modal, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
 import {
   getConsoleAgentChanges,
@@ -35,21 +36,78 @@ import type {
 import { ApiError } from '@/api/client'
 import { JsonBlock, ToolFullInfo } from '@/pages/catalog/ToolDefinitionView'
 import { allowlistCell, lifecycleTag, riskTag, skillDescriptionView, timeCell } from '@/pages/catalog/displayBits'
+import { AgentVersionHistory, type AgentVersionHistoryHandle } from '@/pages/agents/AgentVersionHistory'
 
-/** 详情抽屉骨架（开合与标题由调用页持有；内容组件自己取数）。 */
+import { useDetailMode } from '@/contexts/detailMode'
+
+/**
+ * 详情骨架 —— 根据全局配置 {@link useDetailMode} 选择 Drawer / Modal / Page 三选一。
+ *
+ * <p>⚠️ 配置是全局的：cap.detail.mode 存 localStorage，一处切换全平台生效。
+ * 调用方只管 title/open/onClose/children，不关心最终用哪种形式。
+ *
+ * <p>⚠️ <b>page 模式</b> 暂不做跳转（详情内容在当前页组件里）：
+ * 全局配置是 "允许未来切到新页面详情视图" 的开关预留，v1 统一走 Drawer 或 Modal。
+ * page 模式下本组件 fallback 到 Drawer，保证详情始终可读。
+ */
 export function CatalogDetailDrawer({
   title,
   open,
   onClose,
   children,
+  pagePath,
 }: {
   title: ReactNode
   open: boolean
   onClose: () => void
   children: ReactNode
-}): JSX.Element {
+  /**
+   * 「新页面」模式下跳转的目标路由。
+   *
+   * <p>⚠️ 只有能按 URL 重建的详情才传它（Tool / Skill / MCP 详情组件只依赖 id）。
+   * Agent 注册表详情依赖整行聚合数据、无法从 URL 重建 —— 不传时 page 模式
+   * 回落到抽屉，保证详情始终可读（绝不出现「切了模式就看不到详情」）。
+   */
+  pagePath?: string
+}): JSX.Element | null {
+  const { mode } = useDetailMode()
+  const navigate = useNavigate()
+  const jumpedRef = useRef(false)
+
+  // page 模式：open 后跳转到子路由（详情页自行按 id 取数）。
+  useEffect(() => {
+    if (!open) { jumpedRef.current = false; return }
+    if (mode === 'page' && pagePath && !jumpedRef.current) {
+      jumpedRef.current = true
+      navigate(pagePath)
+    }
+  }, [open, mode, pagePath, navigate])
+
+  if (!open) return null
+
+  if (mode === 'modal') {
+    return (
+      <Modal
+        open
+        onCancel={onClose}
+        title={title}
+        footer={null}
+        width={760}
+        destroyOnHidden
+      >
+        {children}
+      </Modal>
+    )
+  }
+
+  if (mode === 'page' && pagePath) {
+    // 已触发跳转；跳转由路由接管渲染，本容器不重复渲染内容。
+    return null
+  }
+
+  // drawer（默认）/ page 无 pagePath 的兜底
   return (
-    <Drawer open={open} onClose={onClose} title={title} width={760} destroyOnHidden>
+    <Drawer open onClose={onClose} title={title} width={760} destroyOnHidden>
       {children}
     </Drawer>
   )
@@ -362,6 +420,7 @@ export function AgentRegistryDetail({
   /** 详情里「租户名 - UUID」的完整标签；缺省退化为 UUID */
   tenantDetailOf?: (id: string) => string
 }): JSX.Element {
+  const versionHistoryRef = useRef<AgentVersionHistoryHandle>(null)
   const full = agentUniq.find((a) => a.agentId === item.agentId) ?? { ...item, boundTenants: [item.tenantId] }
   const mode = (full.orchestrationMode ?? '').toUpperCase() || 'LEAF'
   const pending = full.pendingState === 'PENDING' || full.pendingState === 'APPROVED'
@@ -448,7 +507,16 @@ export function AgentRegistryDetail({
       )}
 
       {/* ── 第四块：历史变更记录（按需取管理元数据，不含定义正文）── */}
-      <AgentChangeHistory agentId={full.agentId} tenantNameOf={tenantNameOf} />
+      <AgentChangeHistory
+        agentId={full.agentId}
+        tenantNameOf={tenantNameOf}
+        onOpenVersionDiff={(v) => versionHistoryRef.current?.diffVersion(v)}
+      />
+
+      {/* ── 第五块：版本快照历史（含 Diff + 清理草稿；双击记录即对比）── */}
+      <div style={{ marginTop: 16 }}>
+        <AgentVersionHistory ref={versionHistoryRef} agentId={full.agentId} />
+      </div>
 
       <Alert
         type="warning"
@@ -499,9 +567,12 @@ function changeStateText(state: string): string {
 function AgentChangeHistory({
   agentId,
   tenantNameOf,
+  onOpenVersionDiff,
 }: {
   agentId: string
   tenantNameOf: (id: string) => string
+  /** 双击带目标版本的记录时，打开该版本的 Diff（由外层注入）。 */
+  onOpenVersionDiff?: (versionNumber: number) => void
 }): JSX.Element {
   const [changes, setChanges] = useState<PlatformAgentChange[]>([])
   const [loading, setLoading] = useState(true)
@@ -566,6 +637,16 @@ function AgentChangeHistory({
           pagination={false}
           scroll={{ x: 860 }}
           locale={{ emptyText: loading ? '加载中…' : '暂无变更记录' }}
+          onRow={(row) => ({
+            // ⚠️ 双击有「目标版本」的记录 → 打开该版本与上一版本的对比。
+            //   无目标版本（建行/分配租户等审计动作）不跳转，避免打开空 Diff。
+            onDoubleClick: () => {
+              if (row.targetVersion != null && onOpenVersionDiff) {
+                onOpenVersionDiff(row.targetVersion)
+              }
+            },
+            style: row.targetVersion != null ? { cursor: 'pointer' } : undefined,
+          })}
         />
       )}
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>

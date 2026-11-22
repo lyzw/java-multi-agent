@@ -87,3 +87,18 @@
     </select>
 
 </mapper>
+
+    <!--
+      DELETE_UNPUBLISHED_VERSIONS：删除某 Agent 的未发布草稿版本（published_at IS NULL）。
+      ⚠️ 仅删草稿：已发布版本（线上生效过）是可解释历史，不可动。
+      租户可见性由 EXISTS 的 ACTIVE 绑定收口 —— 与 listVersions 同款口径。
+    -->
+    <delete id="deleteUnpublishedVersions">
+        DELETE FROM agent_version av
+        WHERE av.agent_id = #{agentId}::uuid
+          AND av.published_at IS NULL
+          AND EXISTS (SELECT 1 FROM tenant_agent_binding b
+                       WHERE b.tenant_id = #{tenantId}::uuid
+                         AND b.agent_id = av.agent_id
+                         AND b.status = 'ACTIVE')
+    </delete>

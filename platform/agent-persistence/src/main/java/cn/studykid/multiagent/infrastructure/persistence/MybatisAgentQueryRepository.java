@@ -212,6 +212,22 @@ public class MybatisAgentQueryRepository implements AgentQueryPort {
         }
     }
 
+    @Override
+    public int deleteUnpublishedVersions(@NonNull String tenantId, @NonNull String agentId) {
+        shadowCompare("agent_version", tenantId, true);
+        // ⚠️ 仅删未发布草稿：已发布版本（线上生效过）不可动 —— 保留历史可解释性。
+        try {
+            return inTenantScope(tenantId, () -> TransactionalConnectionHolder.inTransaction(
+                    dataSource, context(tenantId), conn ->
+                            mapper.deleteUnpublishedVersions(agentId, tenantId)));
+        } catch (RuntimeException e) {
+            if (isSqlFailure(e)) {
+                throw new IllegalStateException("清理 Agent 未发布草稿失败", e);
+            }
+            throw e;
+        }
+    }
+
     /** 系统身份仅用于绑定 RLS 上下文，不携带任何角色权限。 */
     private static TenantContext context(String tenantId) {
         return new TenantContext(tenantId, "system", java.util.Set.of(), 0L);

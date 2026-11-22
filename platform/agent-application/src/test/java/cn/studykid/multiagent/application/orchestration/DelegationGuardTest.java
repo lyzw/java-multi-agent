@@ -290,6 +290,10 @@ class DelegationGuardTest {
     private static CapAgentDefPort agentDefs(CapAgentDef def) {
         return new CapAgentDefPort() {
             @Override
+            public List<cn.studykid.multiagent.core.cap.CapAgentDef> listVersionsGlobal(String agentId) {
+                return List.of();
+            }
+            @Override
             public boolean insert(CapAgentDef d) {
                 return true;
             }

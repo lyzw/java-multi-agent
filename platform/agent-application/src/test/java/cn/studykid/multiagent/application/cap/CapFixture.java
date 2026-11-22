@@ -534,6 +534,10 @@ final class CapFixture {
 
     @NonNull CapAgentDefPort agentDefs() {
         return new CapAgentDefPort() {
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapAgentDef> listVersionsGlobal(String agentId) {
+                return List.of();
+            }
             // Agent 定义是全局版本行：夹具按 agentId@version 寻址。
             // 端口签名里的 tenantId 仅代表调用方的可见性上下文，不再参与定义行的主键。
             @Override
@@ -627,6 +631,14 @@ final class CapFixture {
     @NonNull CapSkillDefPort skillDefs() {
         return new CapSkillDefPort() {
             @Override
+            public Optional<cn.studykid.multiagent.core.cap.CapSkillDef> findLatest(String skillId) {
+                return java.util.Optional.empty();
+            }
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapSkillDef> listVersions(String skillId) {
+                return List.of();
+            }
+            @Override
             public boolean insert(@NonNull CapSkillDef def) {
                 return skills.putIfAbsent(key(def.id(), def.version()), def) == null;
             }
@@ -650,6 +662,14 @@ final class CapFixture {
 
     @NonNull CapToolDefPort toolDefs() {
         return new CapToolDefPort() {
+            @Override
+            public Optional<cn.studykid.multiagent.core.cap.CapToolDef> findLatest(String toolId) {
+                return java.util.Optional.empty();
+            }
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapToolDef> listVersions(String toolId) {
+                return List.of();
+            }
             @Override
             public boolean insert(@NonNull CapToolDef def) {
                 return tools.putIfAbsent(key(def.id(), def.version()), def) == null;
@@ -692,6 +712,14 @@ final class CapFixture {
 
     @NonNull CapMcpServerDefPort serverDefs() {
         return new CapMcpServerDefPort() {
+            @Override
+            public Optional<cn.studykid.multiagent.core.cap.CapMcpServerDef> findLatest(String serverId) {
+                return java.util.Optional.empty();
+            }
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapMcpServerDef> listVersions(String serverId) {
+                return List.of();
+            }
             @Override
             public boolean insert(@NonNull CapMcpServerDef def) {
                 return servers.putIfAbsent(key(def.id(), def.version()), def) == null;

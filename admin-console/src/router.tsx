@@ -36,6 +36,7 @@ import { DictionaryAdminPage } from '@/pages/dictionaries/DictionaryAdminPage'
 import { ModelCatalogPage } from '@/pages/models/ModelCatalogPage'
 import { ChatAuditConfigPage } from '@/pages/settings/ChatAuditConfigPage'
 import { ConfigCenterPage } from '@/pages/settings/ConfigCenterPage'
+import { CatalogDetailPage } from '@/pages/console/CatalogDetailPage'
 import { ConfigCredentialsPage } from '@/pages/settings/ConfigCredentialsPage'
 import { AgentLabPage } from '@/pages/agentlab/AgentLabPage'
 import { AiChatPage } from '@/pages/agentlab/AiChatPage'
@@ -175,6 +176,15 @@ export const router = createBrowserRouter(
           element: (
             <RequireRole roles={PLATFORM_SCOPE_ROLES}>
               <ToolCatalogPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 目录详情「新页面」模式（全局配置 cap.detail.mode = page）
+          path: 'catalog/:kind/:id',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <CatalogDetailPage />
             </RequireRole>
           ),
         },

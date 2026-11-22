@@ -250,6 +250,7 @@ export function ToolCatalogPage(): JSX.Element {
         title={<><ToolOutlined /> Tool 详情{detailId ? ` · ${detailId}` : ''}</>}
         open={detailId !== null}
         onClose={() => setDetailId(null)}
+        pagePath={detailId ? `/catalog/tools/${encodeURIComponent(detailId)}` : undefined}
       >
         {detailId !== null ? <ToolCatalogDetail id={detailId} /> : null}
       </CatalogDetailDrawer>

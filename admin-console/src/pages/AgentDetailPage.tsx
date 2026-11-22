@@ -7,8 +7,6 @@ import { Navigate, useParams, useNavigate, useSearchParams } from 'react-router-
 import {
   Card,
   Tabs,
-  Table,
-  Tag,
   Button,
   Space,
   Typography,
@@ -31,6 +29,7 @@ import { DelegationTab } from './dependencies/DelegationTab'
 import { AgentDraftPanel } from './agents/AgentDraftPanel'
 import { describeSubmitResult } from '@/pages/publish/publishBits'
 import { AgentOverview } from './agents/AgentOverview'
+import { AgentVersionHistory } from './agents/AgentVersionHistory'
 import { NEW_AGENT_SEGMENT } from './agents/agentDraftForm'
 import type { AgentDefinition, AgentItem, AgentVersion } from '@/api/types'
 
@@ -262,43 +261,9 @@ export function AgentDetailPage(): JSX.Element {
           {
             key: 'versions',
             label: `版本历史（${versions.length}）`,
-            children: (
-              <Card>
-                <Table<AgentVersion>
-                  rowKey="versionId"
-                  dataSource={versions}
-                  pagination={false}
-                  locale={{ emptyText: '尚无版本' }}
-                  columns={[
-                    {
-                      title: '版本',
-                      dataIndex: 'versionNumber',
-                      render: (n: number) => <Tag color="blue">v{n}</Tag>,
-                    },
-                    {
-                      title: '发布状态',
-                      dataIndex: 'publishedAt',
-                      render: (v: string | null) => v ? <Tag color="green">已发布</Tag> : <Tag>草稿</Tag>,
-                    },
-                    { title: '发布时间', dataIndex: 'publishedAt', render: (v: string | null) => v ?? '-' },
-                    { title: '创建时间', dataIndex: 'createdAt' },
-                    {
-                      title: 'definition',
-                      dataIndex: 'definition',
-                      render: (d: string) => (
-                        <Typography.Paragraph
-                          code
-                          ellipsis={{ rows: 2, expandable: true, symbol: '展开' }}
-                          style={{ marginBottom: 0, maxWidth: 420 }}
-                        >
-                          {prettyJson(d)}
-                        </Typography.Paragraph>
-                      ),
-                    },
-                  ]}
-                />
-              </Card>
-            ),
+            // ⚠️ 版本历史统一走 AgentVersionHistory（清理草稿 + 双击 Diff + 发布状态时间线）；
+            //    旧内联 Table 已下线 —— 两份实现迟早漂移，且清理/对比只在一处才安全。
+            children: <AgentVersionHistory agentId={id} />,
           },
           {
             key: 'dependencies',
@@ -373,14 +338,5 @@ export function AgentDetailPage(): JSX.Element {
   )
 }
 
-/** 旧体系的自由 JSON 快照 —— 解析失败就原样呈现，不吞内容。 */
-function prettyJson(raw: string | null): string {
-  if (!raw) return '（无）'
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
-  } catch {
-    return raw
-  }
-}
 
 export default AgentDetailPage

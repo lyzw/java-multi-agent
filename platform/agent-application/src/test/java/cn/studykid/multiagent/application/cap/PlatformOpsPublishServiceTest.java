@@ -237,6 +237,14 @@ class PlatformOpsPublishServiceTest {
     private static CapToolDefPort unusedTools() {
         return new CapToolDefPort() {
             @Override
+            public Optional<cn.studykid.multiagent.core.cap.CapToolDef> findLatest(String toolId) {
+                return java.util.Optional.empty();
+            }
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapToolDef> listVersions(String toolId) {
+                return List.of();
+            }
+            @Override
             public boolean insert(CapToolDef def) {
                 throw new UnsupportedOperationException("闸门路径不应触达 Tool 端口");
             }
@@ -272,6 +280,14 @@ class PlatformOpsPublishServiceTest {
     private static CapSkillDefPort unusedSkills() {
         return new CapSkillDefPort() {
             @Override
+            public Optional<cn.studykid.multiagent.core.cap.CapSkillDef> findLatest(String skillId) {
+                return java.util.Optional.empty();
+            }
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapSkillDef> listVersions(String skillId) {
+                return List.of();
+            }
+            @Override
             public boolean insert(CapSkillDef def) {
                 throw new UnsupportedOperationException("闸门路径不应触达 Skill 端口");
             }
@@ -296,6 +312,14 @@ class PlatformOpsPublishServiceTest {
     private static CapMcpServerDefPort unusedServers() {
         return new CapMcpServerDefPort() {
             @Override
+            public Optional<cn.studykid.multiagent.core.cap.CapMcpServerDef> findLatest(String serverId) {
+                return java.util.Optional.empty();
+            }
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapMcpServerDef> listVersions(String serverId) {
+                return List.of();
+            }
+            @Override
             public boolean insert(CapMcpServerDef def) {
                 throw new UnsupportedOperationException("闸门路径不应触达 MCP Server 端口");
             }
@@ -319,6 +343,10 @@ class PlatformOpsPublishServiceTest {
 
     private static CapAgentDefPort unusedAgents() {
         return new CapAgentDefPort() {
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapAgentDef> listVersionsGlobal(String agentId) {
+                return List.of();
+            }
             @Override
             public boolean insert(CapAgentDef def) {
                 throw new UnsupportedOperationException("闸门路径不应触达 Agent 端口");

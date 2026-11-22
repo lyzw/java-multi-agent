@@ -295,6 +295,10 @@ class AgentChildRefProjectionTest {
 
         final CapAgentDefPort agentDefs = new CapAgentDefPort() {
             @Override
+            public List<cn.studykid.multiagent.core.cap.CapAgentDef> listVersionsGlobal(String agentId) {
+                return List.of();
+            }
+            @Override
             public boolean insert(CapAgentDef def) {
                 String key = def.agentId() + "@" + def.version();
                 if (agents.containsKey(key)) {
@@ -336,6 +340,14 @@ class AgentChildRefProjectionTest {
 
         final CapToolDefPort toolDefs = new CapToolDefPort() {
             @Override
+            public Optional<cn.studykid.multiagent.core.cap.CapToolDef> findLatest(String toolId) {
+                return java.util.Optional.empty();
+            }
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapToolDef> listVersions(String toolId) {
+                return List.of();
+            }
+            @Override
             public boolean insert(CapToolDef def) {
                 return true;
             }
@@ -369,6 +381,14 @@ class AgentChildRefProjectionTest {
 
         final CapSkillDefPort skillDefs = new CapSkillDefPort() {
             @Override
+            public Optional<cn.studykid.multiagent.core.cap.CapSkillDef> findLatest(String skillId) {
+                return java.util.Optional.empty();
+            }
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapSkillDef> listVersions(String skillId) {
+                return List.of();
+            }
+            @Override
             public boolean insert(cn.studykid.multiagent.core.cap.CapSkillDef def) {
                 return true;
             }
@@ -392,6 +412,14 @@ class AgentChildRefProjectionTest {
         };
 
         final CapMcpServerDefPort serverDefs = new CapMcpServerDefPort() {
+            @Override
+            public Optional<cn.studykid.multiagent.core.cap.CapMcpServerDef> findLatest(String serverId) {
+                return java.util.Optional.empty();
+            }
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapMcpServerDef> listVersions(String serverId) {
+                return List.of();
+            }
             @Override
             public boolean insert(CapMcpServerDef def) {
                 return true;

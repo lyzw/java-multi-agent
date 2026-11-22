@@ -265,6 +265,7 @@ export function McpCatalogPage(): JSX.Element {
         title={<><ApiOutlined /> MCP Server 详情{detailId ? ` · ${detailId}` : ''}</>}
         open={detailId !== null}
         onClose={() => setDetailId(null)}
+        pagePath={detailId ? `/catalog/mcps/${encodeURIComponent(detailId)}` : undefined}
       >
         {detailId !== null ? <McpCatalogDetail id={detailId} /> : null}
       </CatalogDetailDrawer>

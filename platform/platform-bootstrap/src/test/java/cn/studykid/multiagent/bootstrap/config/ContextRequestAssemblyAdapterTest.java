@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import org.jspecify.annotations.NonNull;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -257,7 +258,12 @@ class ContextRequestAssemblyAdapterTest {
         public List<CapAgentDef> listLatestPerAgent(String tenantId) {
             throw new UnsupportedOperationException();
         }
-    }
+
+        @Override
+        public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
+            return List.of();
+        }
+}
 
     private static final class StubCatalog implements ModelCatalogPort {
         List<ModelDefinition> definitions = List.of();

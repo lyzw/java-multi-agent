@@ -7,6 +7,7 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -175,6 +176,33 @@ public class AgentController {
     }
 
     /**
+     * 清理 Agent 的<b>未发布草稿版本历史</b>。
+     *
+     * <p>⚠️ <b>仅删 {@code published_at IS NULL} 的草稿行</b>：
+     * 已发布版本是线上生效过的 —— 删除会让历史回放、审计追溯、Diff 对比
+     * 变成不可解释。已发布版本一律保留，清理后列表重取即能看到效果。
+     *
+     * <p>⚠️ <b>没有草稿时返回 removed=0 而非报错</b>：让前端按数量给用户反馈
+     * （"已清理 N 条" / "没有可清理的草稿"），而不是把无操作伪装成失败。
+     */
+    @DeleteMapping("/{agentId}/versions/unpublished")
+    public ResponseEntity<VersionsCleanupResponse> cleanupUnpublishedVersions(
+            @PathVariable String agentId) {
+        TenantContext context = currentPrincipal.context();
+        authorization.requireAuthorized(context,
+                AuthorizationService.Actions.AGENT_MANAGE, null);
+        if (GovernanceSupport.rateLimited(rateLimiter, context,
+                RateLimitPort.Buckets.GOVERNANCE_QUERY)) {
+            return GovernanceSupport.tooManyRequests();
+        }
+        if (agents.findAgent(context.tenantId(), agentId) == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "资源不存在");
+        }
+        int removed = agents.deleteUnpublishedVersions(context.tenantId(), agentId);
+        return ResponseEntity.ok(new VersionsCleanupResponse(agentId, removed));
+    }
+
+    /**
      * 创建 Agent。
      *
      * <p>⚠️ 租户内重名经 {@code agent_name_per_tenant} 唯一约束兜底 → 409。
@@ -270,6 +298,13 @@ public class AgentController {
                     0, item.latestVersionNumber(),
                     null, item.latestPublishedAt());
         }
+    }
+
+    /** 清理草稿版本的响应。 */
+    public record VersionsCleanupResponse(
+            @NonNull String agentId,
+            /** 实际删除的草稿版本行数；0 = 没有未发布草稿可清理。 */
+            int removed) {
     }
 
     /** Agent 版本视图（与端口 {@code AgentVersionItem} 同构）。 */

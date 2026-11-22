@@ -125,7 +125,12 @@ class RootAgentModelConfigProviderTest {
         public @NonNull List<CapToolDef> listAll() {
             return List.of();
         }
-    }
+
+        @Override
+        public List<CapToolDef> listVersions(@NonNull String toolId) {
+            return List.of();
+        }
+}
 
     /** 委派工具装配器替身（按编排声明给不给委派工具）。 */
     private static final class ScriptedDelegationAssembler extends DelegationToolSchemaAssembler {

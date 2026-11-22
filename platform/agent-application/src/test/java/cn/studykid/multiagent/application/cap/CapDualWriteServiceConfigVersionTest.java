@@ -150,6 +150,11 @@ class CapDualWriteServiceConfigVersionTest {
 
     /** 双写用不到的端口替身（仅满足构造）。 */
     private static final CapAgentDefPort UNUSED_AGENT_DEFS = new CapAgentDefPort() {
+            @Override
+            public List<cn.studykid.multiagent.core.cap.CapAgentDef> listVersionsGlobal(String agentId) {
+                return List.of();
+            }
+
         @Override
         public boolean insert(@NonNull CapAgentDef def) {
             throw new UnsupportedOperationException();

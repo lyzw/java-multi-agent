@@ -313,6 +313,7 @@ export function SkillCatalogPage(): JSX.Element {
         title={<><BulbOutlined /> Skill 详情{detailId ? ` · ${detailId}` : ''}</>}
         open={detailId !== null}
         onClose={() => setDetailId(null)}
+        pagePath={detailId ? `/catalog/skills/${encodeURIComponent(detailId)}` : undefined}
       >
         {detailId !== null ? <SkillCatalogDetail id={detailId} /> : null}
       </CatalogDetailDrawer>

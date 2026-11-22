@@ -169,6 +169,11 @@ export function getAgentVersions(id: string): Promise<AgentVersion[]> {
   return request<AgentVersion[]>(`/agents/${id}/versions`, { method: 'GET' })
 }
 
+/** DELETE /api/agents/{id}/versions/unpublished —— 清理未发布草稿版本 */
+export function cleanupAgentVersions(id: string): Promise<{ agentId: string; removed: number }> {
+  return request(`/agents/${id}/versions/unpublished`, { method: 'DELETE' })
+}
+
 /** POST /api/agents —— 创建 Agent（创建人取自令牌，不取自请求体） */
 export function createAgent(payload: CreateAgentRequest): Promise<AgentItem> {
   return request<AgentItem>('/agents', {

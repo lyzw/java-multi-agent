@@ -1548,6 +1548,11 @@ class AgentChatOrchestratorTest {
                                                             @NonNull String agentId) {
             return List.of();
         }
+
+        @Override
+        public int deleteUnpublishedVersions(@NonNull String tenantId, @NonNull String agentId) {
+            return 0;
+        }
     }
 
     /** 闭包解析替身（2 个抽象方法）。 */

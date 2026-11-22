@@ -2,6 +2,7 @@ import { ConfigProvider, App as AntApp } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { RouterProvider } from 'react-router-dom'
 import { SessionProvider } from '@/auth/session'
+import { DetailModeProvider } from '@/contexts/detailMode'
 import { router } from '@/router'
 
 /**
@@ -131,7 +132,9 @@ export function App(): JSX.Element {
     <ConfigProvider locale={zhCN} theme={controlSurfaceTheme}>
       <AntApp>
         <SessionProvider>
-          <RouterProvider router={router} />
+          <DetailModeProvider>
+            <RouterProvider router={router} />
+          </DetailModeProvider>
         </SessionProvider>
       </AntApp>
     </ConfigProvider>

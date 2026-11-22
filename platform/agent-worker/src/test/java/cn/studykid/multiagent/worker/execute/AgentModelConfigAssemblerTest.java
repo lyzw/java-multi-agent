@@ -83,7 +83,12 @@ class AgentModelConfigAssemblerTest {
         public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
             return List.of();
         }
-    }
+
+        @Override
+        public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
+            return List.of();
+        }
+}
 
     /** 闭包替身：可指定该 Agent 自己的工具绑定与 Skill 绑定（含两级描述）。 */
     private static final class ScriptedClosureResolver implements ClosureResolver {
@@ -154,7 +159,12 @@ class AgentModelConfigAssemblerTest {
         public @NonNull List<CapToolDef> listAll() {
             return List.of();
         }
-    }
+
+        @Override
+        public List<CapToolDef> listVersions(@NonNull String toolId) {
+            return List.of();
+        }
+}
 
     private static AgentModelConfigAssembler assembler(ScriptedAgentDefs defs,
                                                         ScriptedClosureResolver closure) {

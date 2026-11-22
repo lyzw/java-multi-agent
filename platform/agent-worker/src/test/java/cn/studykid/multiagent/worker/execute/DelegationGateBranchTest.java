@@ -252,7 +252,12 @@ class DelegationGateBranchTest {
         public @NonNull List<CapAgentDef> listLatestPerAgent(String tenantId) {
             return List.of(parent);
         }
-    }
+
+        @Override
+        public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
+            return List.of();
+        }
+}
 
     /** 内存版委派记录仓储。 */
     private static final class InMemoryInvocations implements AgentInvocationPort {

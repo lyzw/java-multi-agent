@@ -178,7 +178,12 @@ class AgentModelConfigAssemblerCatalogResolutionTest {
         public @NonNull List<CapToolDef> listAll() {
             return List.of();
         }
-    }
+
+        @Override
+        public List<CapToolDef> listVersions(@NonNull String toolId) {
+            return List.of();
+        }
+}
 
     private static final class StubCatalogPort implements ModelCatalogPort {
         private final List<ModelDefinition> all;

@@ -42,4 +42,13 @@ public interface AgentQueryMapper {
     /** 该 Agent 的全部版本（版本号降序）；租户可见性由 EXISTS 的 ACTIVE 绑定收口。 */
     List<AgentVersionViewDO> listVersions(@Param("agentId") String agentId,
                                           @Param("tenantId") String tenantId);
+
+    /**
+     * 删除该 Agent 的未发布草稿版本（{@code published_at IS NULL}）。
+     *
+     * <p>⚠️ 仅删草稿：已发布版本不可动。返回实际删除行数。
+     * 租户可见性由 XML 里 EXISTS 的 ACTIVE 绑定收口。
+     */
+    int deleteUnpublishedVersions(@Param("agentId") String agentId,
+                                 @Param("tenantId") String tenantId);
 }

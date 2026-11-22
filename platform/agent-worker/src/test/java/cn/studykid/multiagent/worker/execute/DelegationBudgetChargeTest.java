@@ -291,7 +291,12 @@ class DelegationBudgetChargeTest {
         public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
             return List.copyOf(rows.values());
         }
-    }
+
+        @Override
+        public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
+            return List.of();
+        }
+}
 
     private static final class InMemoryInvocations implements AgentInvocationPort {
         final Map<String, AgentInvocation> rows = new LinkedHashMap<>();

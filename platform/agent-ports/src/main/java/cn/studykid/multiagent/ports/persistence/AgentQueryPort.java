@@ -53,6 +53,26 @@ public interface AgentQueryPort {
     @NonNull List<AgentVersionItem> listVersions(@NonNull String tenantId,
                                                 @NonNull String agentId);
 
+    /**
+     * 清理 Agent 的<b>未发布版本历史</b>（草稿行，{@code published_at IS NULL}）。
+     *
+     * <p>⚠️ <b>仅删除未发布草稿</b>：已发布版本行（线上生效过）的删除会让
+     * 「这个 Agent 曾经怎么配置」变成不可解释 —— 历史回放、审计追溯、
+     * 版本 Diff 都会丢失语义。故清理只针对从未发布的草稿版本。
+     *
+     * <p>⚠️ <b>最少保留规则</b>：若 Agent 仅有一条版本行（可能是未发布的），
+     * 为避免"清理后列表变成 0 条"的空转操作，也一并删除 —— 前端在列表上
+     * 重取即能看到清理效果。但仅影响该租户可见的版本（RLS + ACTIVE 绑定收口）。
+     *
+     * <p>⚠️ <b>CAS 并发保护</b>：本方法返回被删行数，调用方据此给用户
+     * 「清理了 N 条草稿版本」的反馈 —— 删 0 条 = 没有草稿可清理。
+     *
+     * @param tenantId 租户
+     * @param agentId  Agent 逻辑 id
+     * @return 本次实际删除的版本行数；0 = 没有未发布草稿可清理
+     */
+    int deleteUnpublishedVersions(@NonNull String tenantId, @NonNull String agentId);
+
     /** Agent 视图（含最新版本摘要）。 */
     record AgentItem(
             @NonNull String agentId,

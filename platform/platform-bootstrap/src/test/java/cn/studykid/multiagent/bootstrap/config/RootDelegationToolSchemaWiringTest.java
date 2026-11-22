@@ -107,7 +107,12 @@ class RootDelegationToolSchemaWiringTest {
         public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
             return List.of();
         }
-    }
+
+        @Override
+        public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
+            return List.of();
+        }
+}
 
     /** 可编程的能力快照仓储替身。 */
     private static final class ScriptedSnapshots implements CapabilitySnapshotPort {
@@ -180,6 +185,12 @@ class RootDelegationToolSchemaWiringTest {
 
                                     @Override
                                     public @NonNull Optional<CapToolDef>
+                                            findLatest(@NonNull String toolId) {
+                                        return Optional.empty();
+                                    }
+
+                                    @Override
+                                    public @NonNull Optional<CapToolDef>
                                             findByMcpBinding(@NonNull String mcpServerId,
                                                               @NonNull String mcpToolName) {
                                         return Optional.empty();
@@ -197,7 +208,13 @@ class RootDelegationToolSchemaWiringTest {
                                         //    而不是留一个默认实现（默认返回空 = 撒谎）。
                                         return List.of();
                                     }
-                                }),
+                                
+                                    @Override
+                                    public @NonNull List<CapToolDef>
+                                            listVersions(@NonNull String toolId) {
+                                        return List.of();
+                                    }
+}),
                         new cn.studykid.multiagent.worker.execute.DelegationToolSchemaAssembler(defs)));
     }
 

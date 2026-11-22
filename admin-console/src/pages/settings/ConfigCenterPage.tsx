@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
-import { Alert, Button, Card, Col, Row, Space, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Col, Radio, Row, Space, Tag, Typography } from 'antd'
 import type { ReactNode } from 'react'
+import { useDetailMode, type DetailMode } from '@/contexts/detailMode'
 import { NAV_GROUPS, type NavNode } from '@/layout/navConfig'
 
 const { Title, Paragraph, Text } = Typography
@@ -122,6 +123,8 @@ export function ConfigCenterPage(): JSX.Element {
         }
       />
 
+      <DetailModeSettingCard />
+
       {SECTIONS.map((section) => (
         <Card
           key={section.key}
@@ -159,6 +162,46 @@ export function ConfigCenterPage(): JSX.Element {
         </Card>
       ))}
     </div>
+  )
+}
+
+/**
+ * 「详情查看展示形式」全局开关卡片。
+ *
+ * <p>⚠️ <b>全局生效</b>：这个配置直接写 localStorage + Context，
+ * 所有页面的详情查看（平台目录抽屉、Agent 版本历史等）立即跟随。
+ * Agent 详情、历史记录、变更对比在三种形式上**内容完全一致**，
+ * 只是外壳（抽屉 / 弹窗 / 新页面）不同 —— 不会出现"换个壳就看不到历史"。
+ */
+function DetailModeSettingCard(): JSX.Element {
+  const { mode, setMode, labels } = useDetailMode()
+  return (
+    <Card
+      size="small"
+      title="界面与交互"
+      style={{ marginBottom: 16 }}
+      extra={<Text type="secondary">全局配置 · 影响所有页面的详情查看形式</Text>}
+    >
+      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        <Text strong>详情查看展示形式</Text>
+        <Radio.Group
+          value={mode}
+          optionType="button"
+          buttonStyle="solid"
+          onChange={(e) => setMode(e.target.value as DetailMode)}
+          options={[
+            { label: labels.drawer, value: 'drawer' },
+            { label: labels.modal, value: 'modal' },
+            { label: labels.page, value: 'page' },
+          ]}
+        />
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          抽屉：在列表上方展开，列表状态与滚动位置保留（推荐）；
+          弹窗：居中浮层、带遮罩；新页面：独立路由视图。
+          三种形式下详情内容、历史记录与变更对比的交互完全一致。
+        </Text>
+      </Space>
+    </Card>
   )
 }
 

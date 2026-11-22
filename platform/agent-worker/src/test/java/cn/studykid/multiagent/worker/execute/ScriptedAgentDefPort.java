@@ -78,4 +78,9 @@ final class ScriptedAgentDefPort implements CapAgentDefPort {
     public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
         return List.of();
     }
+
+        @Override
+        public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
+            return List.of();
+        }
 }

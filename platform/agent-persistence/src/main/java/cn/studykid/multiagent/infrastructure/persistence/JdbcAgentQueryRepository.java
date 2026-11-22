@@ -269,6 +269,28 @@ public class JdbcAgentQueryRepository implements AgentQueryPort {
                 SubjectContext.forTenant(subjectTenantId), rowTenantId, isShared);
     }
 
+    @Override
+    public int deleteUnpublishedVersions(@NonNull String tenantId, @NonNull String agentId) {
+        shadowCompare("agent_version", tenantId, true);
+        // ⚠️ 仅删未发布草稿：已发布版本（线上生效过）不可动 —— 保留历史可解释性。
+        String sql = "DELETE FROM agent_version av"
+                + " WHERE av.agent_id = ?::uuid"
+                + " AND av.published_at IS NULL"
+                + " AND EXISTS (SELECT 1 FROM tenant_agent_binding b"
+                + " WHERE b.tenant_id = ?::uuid"
+                + " AND b.agent_id = av.agent_id"
+                + " AND b.status = 'ACTIVE')";
+        try (TenantConnectionLease lease = tenantConnection(tenantId)) {
+            try (PreparedStatement ps = lease.connection().prepareStatement(sql)) {
+                ps.setString(1, agentId);
+                ps.setString(2, tenantId);
+                return ps.executeUpdate();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("清理 Agent 未发布草稿失败", e);
+        }
+    }
+
     private AgentItem read(ResultSet rs) throws SQLException {
         // ⚠️ getInt 对 NULL 返回 0；version_number 约束 > 0，故 0 即「无版本」
         int latestVersionNumber = rs.getInt("latest_version_number");

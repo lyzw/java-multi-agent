@@ -317,7 +317,12 @@ class NestedDelegationGateTest {
         public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
             return List.copyOf(rows.values());
         }
-    }
+
+        @Override
+        public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
+            return List.of();
+        }
+}
 
     /** 记录每次委派的父与深度的调用记录仓储。 */
     private static final class InMemoryInvocations implements AgentInvocationPort {

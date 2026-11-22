@@ -89,7 +89,12 @@ class WorkerChildAgentModelConfigProviderTest {
         public @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId) {
             return List.of(find(tenantId, AGENT, VERSION).orElseThrow());
         }
-    }
+
+        @Override
+        public List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
+            return List.of();
+        }
+}
 
     /** 空闭包（工具表里除委派工具外什么都没有）。 */
     private static final class EmptyClosureResolver implements ClosureResolver {
@@ -147,7 +152,12 @@ class WorkerChildAgentModelConfigProviderTest {
         public @NonNull List<CapToolDef> listAll() {
             return List.of();
         }
-    }
+
+        @Override
+        public List<CapToolDef> listVersions(@NonNull String toolId) {
+            return List.of();
+        }
+}
 
     // ── 装配 ──────────────────────────────────────────────────────
 

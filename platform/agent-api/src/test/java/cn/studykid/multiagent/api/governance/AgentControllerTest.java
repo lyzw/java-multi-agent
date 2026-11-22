@@ -8,6 +8,9 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import java.time.Instant;
 import java.util.List;
@@ -126,6 +129,51 @@ class AgentControllerTest {
                 .satisfies(e -> assertThat(
                         ((org.springframework.web.server.ResponseStatusException) e).getStatusCode())
                         .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    // ── DELETE /api/agents/{id}/versions/unpublished ──
+
+    @Test
+    @DisplayName("清理未发布草稿 → 200 + removed 数量")
+    void cleanupUnpublished_ok() {
+        stubContext(Set.of("TENANT_ADMIN"));
+        AgentController c = controller();
+        when(agents.findAgent(TENANT_ID, AGENT_ID)).thenReturn(sampleAgent());
+        when(agents.deleteUnpublishedVersions(TENANT_ID, AGENT_ID)).thenReturn(3);
+
+        var resp = c.cleanupUnpublishedVersions(AGENT_ID);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody()).isNotNull();
+        assertThat(resp.getBody().agentId()).isEqualTo(AGENT_ID);
+        assertThat(resp.getBody().removed()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("清理未发布草稿：没有草稿 → 200 + removed=0（不报错，让前端按数量反馈）")
+    void cleanupUnpublished_zero_whenNoDraft() {
+        stubContext(Set.of("TENANT_ADMIN"));
+        AgentController c = controller();
+        when(agents.findAgent(TENANT_ID, AGENT_ID)).thenReturn(sampleAgent());
+        when(agents.deleteUnpublishedVersions(TENANT_ID, AGENT_ID)).thenReturn(0);
+
+        var resp = c.cleanupUnpublishedVersions(AGENT_ID);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().removed()).isZero();
+    }
+
+    @Test
+    @DisplayName("清理未发布草稿：Agent 不存在 → 404（不区分无权限，避免存在性探测）")
+    void cleanupUnpublished_notFound_when_missing() {
+        stubContext(Set.of("TENANT_ADMIN"));
+        AgentController c = controller();
+        when(agents.findAgent(TENANT_ID, AGENT_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> c.cleanupUnpublishedVersions(AGENT_ID))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .satisfies(e -> assertThat(
+                        ((org.springframework.web.server.ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+        verify(agents, never()).deleteUnpublishedVersions(anyString(), anyString());
     }
 
     // ── 鉴权闸门 ──
