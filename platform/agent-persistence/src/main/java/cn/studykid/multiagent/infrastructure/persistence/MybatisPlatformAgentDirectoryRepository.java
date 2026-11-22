@@ -13,6 +13,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformAgentDirectoryMapper;
 import cn.studykid.multiagent.ports.persistence.cap.PlatformAgentDirectoryPort;
+import cn.studykid.multiagent.ports.persistence.cap.PlatformAgentDirectoryPort.PlatformAgentChange;
 
 /**
  * PlatformAgentDirectoryPort MyBatis 实现（opsSqlSessionFactory + BYPASSRLS）。
@@ -49,7 +50,16 @@ public class MybatisPlatformAgentDirectoryRepository implements PlatformAgentDir
                         listOf(r.defRoles()), listOf(r.defEnabledSkills()), listOf(r.defCapabilityTags()),
                         hasOverrides(r.defOverrides()), r.defModelRef(), listOf(r.defSkillBundles()),
                         hasNonEmptyJson(r.defInstructions()), hasNonEmptyJson(r.defOrchestration()),
-                        r.orchestrationMode(), r.tenantCount()))
+                        r.orchestrationMode(), r.tenantCount(), r.pendingState(), r.pendingAt()))
+                .toList();
+    }
+
+    @Override
+    public @NonNull List<PlatformAgentChange> listAgentChanges(@NonNull String agentId, int limit) {
+        return mapper.listAgentChanges(agentId, limit).stream()
+                .map(r -> new PlatformAgentChange(
+                        r.changeId(), r.category(), r.tenantId(), r.action(), r.state(),
+                        r.targetVersion(), r.reason(), r.actorId(), r.requestedAt(), r.appliedAt()))
                 .toList();
     }
 

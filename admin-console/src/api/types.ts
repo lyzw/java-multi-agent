@@ -1014,6 +1014,28 @@ export interface PlatformAgentRegistryItem {
   orchestrationMode?: string | null
   /** 该 Agent 被多少个租户 ACTIVE 绑定（复用度指标，跨 tenant_agent_binding 聚合） */
   tenantCount?: number
+  /** 存在尚未执行的变更申请时的流程状态（PENDING / APPROVED）；否则 null */
+  pendingState?: 'PENDING' | 'APPROVED' | string | null
+  /** 最近一条未执行变更申请的时间 */
+  pendingAt?: string | null
+}
+
+/**
+ * Agent 历史变更记录（管理元数据，绝无定义正文）。
+ * category=CONFIG 来自发布申请单；category=AUDIT 来自平台审计（建行 / 分配租户）。
+ */
+export interface PlatformAgentChange {
+  changeId: string
+  category: 'CONFIG' | 'AUDIT' | string
+  tenantId: string | null
+  /** CONFIG: PUBLISH / LIFECYCLE_TRANSITION；AUDIT: agent_config.create / binding.* */
+  action: string
+  state: 'PENDING' | 'APPROVED' | 'APPLIED' | 'REJECTED' | 'FAILED' | string
+  targetVersion: number | null
+  reason: string
+  actorId: string
+  requestedAt: string
+  appliedAt: string | null
 }
 
 /** 平台链上的目录项形状与租户链 /api/cap/catalog/* 完全一致（复用旧契约类型）。 */

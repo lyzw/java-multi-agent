@@ -33,6 +33,18 @@ public interface PlatformAgentDirectoryPort {
     List<PlatformAgentRow> listAgents(@Nullable String tenantIdFilter);
 
     /**
+     * 列出某个 Agent 的变更记录（跨租户，平台运营视角）。
+     *
+     * <p>只回变更**元数据**：申请单动作 / 审批状态 / 理由 / 申请人 / 时间 / 目标版本，
+     * 不回定义正文 —— 与注册表清单同一条禁区红线。
+     *
+     * @param agentId Agent 标识（UUID 文本）
+     * @param limit   最多返回条数（按申请时间倒序）
+     */
+    @NonNull
+    List<PlatformAgentChange> listAgentChanges(@NonNull String agentId, int limit);
+
+    /**
      * 一条 Agent 注册表条目（管理元数据，绝无业务指令正文）。
      *
      * <p>⚠️ <b>Agent 视角扩展（2026-11-19）</b>：原字段只覆盖「租户绑定 + 能力清单」，
@@ -74,6 +86,29 @@ public interface PlatformAgentDirectoryPort {
             /** 编排模式（LEAF / ROUTER / SEQUENTIAL）；null = 未声明（视为 LEAF） */
             @Nullable String orchestrationMode,
             /** 该 Agent 被多少个租户 ACTIVE 绑定（复用度指标，跨 tenant_agent_binding 聚合） */
-            int tenantCount) {
+            int tenantCount,
+            /** 存在未执行的变更申请时为该申请状态（PENDING / APPROVED）；否则 null */
+            @Nullable String pendingState,
+            /** 未执行申请的时间；否则 null */
+            @Nullable Instant pendingAt) {
+    }
+
+    /**
+     * Agent 变更记录（定义发布 / 生命周期 / 绑定调整等管理动作的元数据）。
+     *
+     * <p>⚠️ reason 只承载人工填写的变更理由或审计动作摘要，不含定义正文。
+     */
+    record PlatformAgentChange(
+            @NonNull String changeId,
+            /** CONFIG = 发布申请单；AUDIT = 平台审计事件（建行 / 分配租户） */
+            @NonNull String category,
+            @Nullable String tenantId,
+            @NonNull String action,
+            @NonNull String state,
+            @Nullable Integer targetVersion,
+            @NonNull String reason,
+            @NonNull String actorId,
+            @NonNull Instant requestedAt,
+            @Nullable Instant appliedAt) {
     }
 }

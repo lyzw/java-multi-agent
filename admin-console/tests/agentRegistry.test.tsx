@@ -6,15 +6,21 @@ import { App as AntApp } from 'antd'
 
 vi.mock('@/api/adminApi', () => ({
   getConsoleAgentRegistry: vi.fn(),
+  getConsoleAgentChanges: vi.fn(),
   getConsoleToolCatalog: vi.fn(),
   getConsoleSkillCatalog: vi.fn(),
   getConsoleMcpCatalog: vi.fn(),
+  getConsoleTool: vi.fn(),
+  getConsoleToolRelations: vi.fn(),
+  getConsoleSkill: vi.fn(),
+  getConsoleSkillRelations: vi.fn(),
+  getConsoleMcp: vi.fn(),
+  getConsoleMcpRelations: vi.fn(),
   listPlatformCapabilityRequests: vi.fn(),
   submitPlatformPublishRequest: vi.fn(),
   decidePlatformPublishRequest: vi.fn(),
   applyPlatformPublishRequest: vi.fn(),
   submitPlatformLifecycleRequest: vi.fn(),
-  // 运营代租户配置 Agent（写通道）
   createPlatformAgent: vi.fn(),
   submitPlatformAgentPublishRequest: vi.fn(),
   submitPlatformAgentLifecycleRequest: vi.fn(),
@@ -22,7 +28,7 @@ vi.mock('@/api/adminApi', () => ({
   decidePlatformAgentPublishRequest: vi.fn(),
   applyPlatformAgentPublishRequest: vi.fn(),
   getPlatformAgentDefinition: vi.fn(),
-  // 全局 Agent 与租户的多对多绑定（直接配置 CRUD）
+  getPlatformTenants: vi.fn(),
   listPlatformAgentBindings: vi.fn(),
   listPlatformAgentTenants: vi.fn(),
   bindPlatformAgent: vi.fn(),
@@ -31,6 +37,8 @@ vi.mock('@/api/adminApi', () => ({
 }))
 import {
   getConsoleAgentRegistry,
+  getConsoleAgentChanges,
+  getPlatformTenants,
   listPlatformAgentTenants,
   submitPlatformAgentLifecycleRequest,
   getPlatformAgentDefinition,
@@ -39,6 +47,13 @@ import {
 import { ApiError } from '@/api/client'
 
 import { AgentRegistryPage } from '@/pages/console/AgentRegistryPage'
+
+const TENANT_A = '11111111-1111-1111-1111-111111111111'
+const TENANT_B = '22222222-2222-2222-2222-222222222222'
+const AGENT_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+const AGENT_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+const AGENT_C = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+
 beforeAll(() => {
   if (!window.matchMedia) {
     window.matchMedia = ((query: string) => ({
@@ -56,35 +71,38 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.mocked(getConsoleAgentRegistry).mockReset()
+  vi.mocked(getConsoleAgentChanges).mockReset()
+  vi.mocked(getPlatformTenants).mockReset()
+  vi.mocked(listPlatformAgentTenants).mockReset()
   vi.mocked(submitPlatformAgentLifecycleRequest).mockReset()
   vi.mocked(getPlatformAgentDefinition).mockReset()
-  vi.mocked(listPlatformAgentTenants).mockReset()
   vi.mocked(unbindPlatformAgent).mockReset()
 })
 
-// ---- 夹具：两个租户各若干 Agent ----
 const ENTRIES = [
   {
-    tenantId: 'tenant-alpha',
-    agentId: 'alpha-1',
+    tenantId: TENANT_A,
+    agentId: AGENT_A,
     name: '订单助手',
-    description: null,
+    description: '负责订单查询',
     versionCount: 3,
     latestVersionNumber: 3,
     latestPublishedAt: '2026-10-20T00:00:00Z',
     defVersion: 2,
     lifecycleState: 'PUBLISHED',
     roles: ['order-reader'],
-    enabledSkills: ['sk-1', 'sk-2'],
+    enabledSkills: ['sk-1'],
     capabilityTags: ['order'],
     hasOverrides: false,
+    pendingState: 'PENDING',
+    pendingAt: '2026-11-21T10:00:00Z',
   },
   {
-    tenantId: 'tenant-alpha',
-    agentId: 'alpha-2',
+    tenantId: TENANT_A,
+    agentId: AGENT_B,
     name: null,
     description: null,
-    versionCount: 1,
+    versionCount: 0,
     latestVersionNumber: null,
     latestPublishedAt: null,
     defVersion: null,
@@ -95,8 +113,8 @@ const ENTRIES = [
     hasOverrides: false,
   },
   {
-    tenantId: 'tenant-beta',
-    agentId: 'beta-1',
+    tenantId: TENANT_B,
+    agentId: AGENT_C,
     name: '客服助手',
     description: null,
     versionCount: 2,
@@ -105,11 +123,41 @@ const ENTRIES = [
     defVersion: 1,
     lifecycleState: 'DEPRECATED',
     roles: ['support'],
-    enabledSkills: ['sk-9'],
+    enabledSkills: [],
     capabilityTags: ['support'],
     hasOverrides: true,
   },
 ]
+
+const TENANTS = [
+  {
+    tenantId: TENANT_A, slug: 'alpha', name: '订单租户', lifecycleState: 'ACTIVE',
+    plan: null, effectivePolicyVersion: 1, tenantAuthzVersion: 1,
+  },
+  {
+    tenantId: TENANT_B, slug: 'beta', name: '客服租户', lifecycleState: 'ACTIVE',
+    plan: null, effectivePolicyVersion: 1, tenantAuthzVersion: 1,
+  },
+]
+
+function stubDefaults() {
+  vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+  vi.mocked(getPlatformTenants).mockResolvedValue(TENANTS as never)
+  vi.mocked(getConsoleAgentChanges).mockResolvedValue([
+    {
+      changeId: 'req-1', category: 'CONFIG', tenantId: TENANT_A,
+      action: 'PUBLISH', state: 'PENDING', targetVersion: 3,
+      reason: '补充订单字段', actorId: 'operator-1',
+      requestedAt: '2026-11-21T10:00:00Z', appliedAt: null,
+    },
+    {
+      changeId: 'req-2', category: 'AUDIT', tenantId: TENANT_A,
+      action: 'agent_config.binding.bind', state: 'APPLIED', targetVersion: null,
+      reason: `agent_config.binding.bind tenant=${TENANT_A}`, actorId: 'operator-2',
+      requestedAt: '2026-11-20T10:00:00Z', appliedAt: '2026-11-20T10:00:00Z',
+    },
+  ] as never)
+}
 
 function renderRegistry() {
   return render(
@@ -121,147 +169,108 @@ function renderRegistry() {
   )
 }
 
-describe('平台控制台 · Agent 注册表 /agents（运营代配置 · 按租户分组）', () => {
-  it('✅ 按租户分 Tabs：全部绑定 + 每个 tenantId 各一个 Tab', async () => {
-    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+describe('平台控制台 · Agent 注册表（中文优先 · 跨租户 · 运营配置）', () => {
+  it('✅ 列表用中文名称而非 UUID；租户筛选显示租户名', async () => {
+    stubDefaults()
     const { container } = renderRegistry()
-    await waitFor(() => expect(screen.getByText('alpha-1')).toBeTruthy())
-    const labels = Array.from(container.querySelectorAll('.ant-tabs-tab')).map((t) => t.textContent ?? '')
-    expect(labels.some((l) => l.includes('全部绑定'))).toBe(true)
-    expect(labels.some((l) => l.includes('tenant-alpha'))).toBe(true)
-    expect(labels.some((l) => l.includes('tenant-beta'))).toBe(true)
-  })
+    await waitFor(() => expect(screen.getAllByText('订单助手').length).toBeGreaterThan(0))
+    expect(screen.getAllByText('客服助手').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('未命名 Agent').length).toBeGreaterThan(0)
+    expect(screen.queryByText(AGENT_A)).toBeNull()
+    expect(screen.queryByText(AGENT_B)).toBeNull()
 
-  it('✅ 「全部租户」3 行；切到 tenant-beta 只剩该租户的行', async () => {
-    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
-    const { container } = renderRegistry()
-    await waitFor(() => expect(screen.getByText('beta-1')).toBeTruthy())
-
-    const betaTab = Array.from(container.querySelectorAll('.ant-tabs-tab')).find((t) =>
-      (t.textContent ?? '').includes('tenant-beta'),
-    )!
-    fireEvent.click(betaTab)
+    // 租户下拉的选项以中文名呈现（Select 选项在 portal 中，需先展开）
+    const selectors = container.querySelectorAll('.ant-select-selector')
+    fireEvent.mouseDown(selectors[1]!)
     await waitFor(() => {
-      const active = container.querySelector<HTMLElement>('.ant-tabs-tabpane-active')!
-      expect(within(active).getByText('beta-1')).toBeTruthy()
-      expect(within(active).queryByText('alpha-1')).toBeNull()
+      const options = Array.from(document.querySelectorAll('.ant-select-item-option-content'))
+        .map((el) => el.textContent ?? '')
+      expect(options).toContain('订单租户')
+      expect(options).not.toContain(TENANT_A)
     })
   })
 
-  it('✅ 全局实体声明：页头声明全局 Agent + 多对多绑定，保留申请队列与新建入口', async () => {
-    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+  it('✅ 已修改未发布：列表标红字标签，统计卡计数包含该 Agent', async () => {
+    stubDefaults()
     renderRegistry()
-    await waitFor(() =>
-      expect(
-        screen.getByText(/Agent 为全局实体；租户通过配置绑定使用/),
-      ).toBeTruthy(),
-    )
-    expect(screen.getByText(/同一 Agent 可分配给多个租户/)).toBeTruthy()
-    // ⚠️ 写入口：新建 Agent + 申请队列必须可见
-    expect(screen.getByRole('button', { name: /新建 Agent/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /申请队列/ })).toBeTruthy()
+    await waitFor(() => expect(screen.getAllByText('已修改未发布').length).toBeGreaterThan(0))
+    // 统计卡「已修改未发布」的值为 1
+    const title = screen.getAllByText('已修改未发布')
+      .find((el) => el.classList.contains('ant-statistic-title'))!
+    const card = title.closest('.ant-card')!
+    expect(within(card as HTMLElement).getByText('1')).toBeTruthy()
   })
 
-  it('✅ 行尾写入口：每行有 编辑 / 分配租户 / 停用 / 详情；已停用行的「停用」被禁用', async () => {
-    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+  it('✅ 行尾写入口齐全；已停用行的「停用」被禁用', async () => {
+    stubDefaults()
     const { container } = renderRegistry()
-    await waitFor(() => expect(screen.getByText('beta-1')).toBeTruthy())
+    await waitFor(() => expect(screen.getAllByText('订单助手').length).toBeGreaterThan(0))
     const body = container.querySelector<HTMLElement>('.ant-table-tbody')!
-    // 每行四个动作按钮（编辑 / 分配租户 / 停用 / 详情）
-    const rowButtons = Array.from(body.querySelectorAll('tr'))
-      .map((tr) =>
-        Array.from(tr.querySelectorAll('td button')).map((b) => (b.textContent ?? '').replace(/\s+/g, '')),
-      )
-      .filter((btns) => btns.length > 0)
-    expect(rowButtons).toHaveLength(ENTRIES.length)
-    expect(rowButtons.every((btns) =>
-      ['编辑', '分配租户', '停用', '详情'].every((t) => btns.includes(t)),
-    )).toBe(true)
-    // beta-1 已 DEPRECATED → 停用按钮禁用
-    const betaRow = Array.from(body.querySelectorAll('tr')).find((tr) => tr.textContent?.includes('beta-1'))!
-    const deprecateBtn = Array.from(betaRow.querySelectorAll('td button')).find((b) => b.textContent?.includes('停用'))!
-    expect(deprecateBtn.hasAttribute('disabled')).toBe(true)
+    const rows = Array.from(body.querySelectorAll('tr')).filter((tr) => tr.textContent?.includes('客服助手'))
+    expect(rows.length).toBeGreaterThan(0)
+    const buttons = Array.from(rows[0]!.querySelectorAll('td button'))
+      .map((b) => (b.textContent ?? '').replace(/\s+/g, ''))
+    expect(buttons).toContain('编辑')
+    expect(buttons).toContain('分配租户')
+    expect(buttons).toContain('详情')
+    const deprecate = Array.from(rows[0]!.querySelectorAll('td button'))
+      .find((b) => (b.textContent ?? '').includes('停用'))!
+    expect(deprecate.hasAttribute('disabled')).toBe(true)
   })
 
-  it('✅ 分配租户：读取该全局 Agent 的绑定列表，停用分配走直接配置 CRUD', async () => {
-    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+  it('✅ 分配租户：抽屉标题与表格用租户名，停用分配仍按 tenantId 调用', async () => {
+    stubDefaults()
     vi.mocked(listPlatformAgentTenants).mockResolvedValue([
       {
-        tenantId: 'tenant-alpha',
-        agentId: 'alpha-1',
-        status: 'ACTIVE',
-        pinnedVersion: null,
-        config: '{}',
-        createdAt: '2026-10-20T00:00:00Z',
-        updatedAt: '2026-10-20T00:00:00Z',
+        tenantId: TENANT_A, agentId: AGENT_A, status: 'ACTIVE', pinnedVersion: null,
+        config: '{}', createdAt: '2026-10-20T00:00:00Z', updatedAt: '2026-10-20T00:00:00Z',
       },
     ] as never)
     vi.mocked(unbindPlatformAgent).mockResolvedValue(undefined as never)
     const { container } = renderRegistry()
-    await waitFor(() => expect(screen.getByText('alpha-1')).toBeTruthy())
-
-    const firstRow = container.querySelector<HTMLElement>(
-      '.ant-table-tbody tr:not(.ant-table-measure-row)',
-    )!
+    await waitFor(() => expect(screen.getAllByText('订单助手').length).toBeGreaterThan(0))
+    const firstRow = container.querySelector<HTMLElement>('.ant-table-tbody tr:not(.ant-table-measure-row)')!
     fireEvent.click(within(firstRow).getByRole('button', { name: /分配租户/ }))
-
-    await waitFor(() => expect(listPlatformAgentTenants).toHaveBeenCalledWith('alpha-1'))
-    const title = await screen.findByText('分配租户（Agent alpha-1）')
+    const title = await screen.findByText('分配租户（Agent 订单助手）')
     const drawer = title.closest('.ant-drawer') as HTMLElement
-    expect(within(drawer).getByText('tenant-alpha')).toBeTruthy()
-    expect(within(drawer).getByText('跟随发布头')).toBeTruthy()
-
+    await waitFor(() => expect(within(drawer).getAllByText('订单租户').length).toBeGreaterThan(0))
     fireEvent.click(within(drawer).getByRole('button', { name: /停用分配/ }))
-    await waitFor(() =>
-      expect(unbindPlatformAgent).toHaveBeenCalledWith('tenant-alpha', 'alpha-1'),
-    )
+    await waitFor(() => expect(unbindPlatformAgent).toHaveBeenCalledWith(TENANT_A, AGENT_A))
   })
 
-  it('✅ 双击行打开详情抽屉：内容来自行内字段，注册表**零新请求**', async () => {
-    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+  it('✅ 详情：显示「租户名 - UUID」、历史变更记录中文动作/理由，且只发一次历史请求', async () => {
+    stubDefaults()
     const { container } = renderRegistry()
-    await waitFor(() => expect(screen.getByText('alpha-1')).toBeTruthy())
-    expect(getConsoleAgentRegistry).toHaveBeenCalledTimes(1)
-
-    fireEvent.dblClick(container.querySelector<HTMLElement>('.ant-table-tbody td')!)
-    // 抽屉标题 = 租户 :: agentId；关键字段与红线声明都在
-    await waitFor(() => expect(screen.getByText('tenant-alpha :: alpha-1')).toBeTruthy())
-    const drawer = screen.getByText('tenant-alpha :: alpha-1').closest('.ant-drawer') as HTMLElement
-    // ⚠️ 同名文本（order-reader）也在列表行里 —— 字段断言须限定在抽屉内。
-    expect(within(drawer).getByText('order-reader')).toBeTruthy()
-    expect(within(drawer).getByText('跨租户只读盘点')).toBeTruthy()
-    // ⚠️ 详情不发任何请求（无单条端点，渲染行内数据），更不允许把注册表 list 再打一遍
-    expect(getConsoleAgentRegistry).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.getAllByText('订单助手').length).toBeGreaterThan(0))
+    const row = Array.from(container.querySelectorAll('.ant-table-tbody tr'))
+      .find((tr) => tr.textContent?.includes('订单助手'))!
+    fireEvent.click(within(row as HTMLElement).getByRole('button', { name: /详情/ }))
+    await waitFor(() => expect(screen.getByText('历史变更记录（最近 20 条）')).toBeTruthy())
+    const drawer = screen.getByText('历史变更记录（最近 20 条）').closest('.ant-drawer') as HTMLElement
+    expect(within(drawer).getByText(`订单租户 - ${TENANT_A}`)).toBeTruthy()
+    expect(within(drawer).getByText('已修改未发布（待审批）')).toBeTruthy()
+    expect(within(drawer).getByText('定义发布')).toBeTruthy()
+    expect(within(drawer).getByText('分配租户')).toBeTruthy()
+    expect(within(drawer).getByText('补充订单字段')).toBeTruthy()
+    expect(getConsoleAgentChanges).toHaveBeenCalledWith(AGENT_A, 20)
+    expect(getConsoleAgentChanges).toHaveBeenCalledTimes(1)
   })
 
-  it('✅ 行尾「详情」按钮与双击等价', async () => {
-    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
-    const { container } = renderRegistry()
-    await waitFor(() => expect(screen.getByText('beta-1')).toBeTruthy())
-    fireEvent.click(within(container.querySelector<HTMLElement>('.ant-table-tbody')!).getAllByRole('button', { name: /详\s*情/ })[2]!)
-    await waitFor(() => expect(screen.getByText('tenant-beta :: beta-1')).toBeTruthy())
-  })
-
-  it('✅ 停用（删除语义）：填理由提交 → 走平台链生命周期申请（DEPRECATED 终态），携带 tenantId / 版本号', async () => {
-    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+  it('✅ 停用（删除语义）：填理由提交 → 走平台链生命周期申请', async () => {
+    stubDefaults()
     vi.mocked(submitPlatformAgentLifecycleRequest).mockResolvedValue({ requestId: 'req-1' } as never)
     const { container } = renderRegistry()
-    await waitFor(() => expect(screen.getByText('alpha-1')).toBeTruthy())
-
-    // 在第一行的行尾点「停用」
-    const firstRow = container.querySelector<HTMLElement>('.ant-table-tbody tr:not(.ant-table-measure-row)')!
-    fireEvent.click(within(firstRow).getByRole('button', { name: /停用/ }))
-    // 弹窗出现：填变更理由
+    await waitFor(() => expect(screen.getAllByText('订单助手').length).toBeGreaterThan(0))
+    const row = container.querySelector<HTMLElement>('.ant-table-tbody tr:not(.ant-table-measure-row)')!
+    fireEvent.click(within(row).getByRole('button', { name: /停用/ }))
     const textarea = await screen.findByPlaceholderText('说明停用原因（必填）')
     fireEvent.change(textarea, { target: { value: '不再使用' } })
     fireEvent.click(screen.getByRole('button', { name: /提交停用申请/ }))
-
     await waitFor(() =>
       expect(submitPlatformAgentLifecycleRequest).toHaveBeenCalledWith(
         expect.objectContaining({
-          tenantId: 'tenant-alpha',
-          objectId: 'alpha-1',
-          // alpha-1 defVersion=2 → 停用针对权威定义的当前版本
+          tenantId: TENANT_A,
+          objectId: AGENT_A,
           version: 2,
           expectedFrom: 'PUBLISHED',
           reason: '不再使用',
@@ -270,49 +279,33 @@ describe('平台控制台 · Agent 注册表 /agents（运营代配置 · 按租
     )
   })
 
-  it('✅ 修改：点「编辑」先按 tenantId 取权威定义回填（取不到如实标记写入口可用）', async () => {
-    vi.mocked(getConsoleAgentRegistry).mockResolvedValue(ENTRIES as never)
+  it('✅ 修改：先按 tenantId 取权威定义回填', async () => {
+    stubDefaults()
     vi.mocked(getPlatformAgentDefinition).mockResolvedValue({
-      agentId: 'alpha-1',
-      version: 2,
-      name: '订单助手',
-      roles: ['order-reader'],
-      enabledSkills: [],
-      skillBundles: [],
-      capabilityTags: [],
-      overrides: '{}',
-      orchestration: '{}',
-      instructions: '{}',
-      generationParams: '{}',
-      published: true,
+      agentId: AGENT_A, version: 2, name: '订单助手', roles: ['order-reader'],
+      enabledSkills: [], skillBundles: [], capabilityTags: [], overrides: '{}',
+      orchestration: '{}', instructions: '{}', generationParams: '{}', published: true,
     } as never)
     const { container } = renderRegistry()
-    await waitFor(() => expect(screen.getByText('alpha-1')).toBeTruthy())
-
-    const firstRow = container.querySelector<HTMLElement>('.ant-table-tbody tr:not(.ant-table-measure-row)')!
-    fireEvent.click(within(firstRow).getByRole('button', { name: /编辑/ }))
-    await waitFor(() =>
-      expect(getPlatformAgentDefinition).toHaveBeenCalledWith('tenant-alpha', 'alpha-1'),
-    )
+    await waitFor(() => expect(screen.getAllByText('订单助手').length).toBeGreaterThan(0))
+    const row = container.querySelector<HTMLElement>('.ant-table-tbody tr:not(.ant-table-measure-row)')!
+    fireEvent.click(within(row).getByRole('button', { name: /编辑/ }))
+    await waitFor(() => expect(getPlatformAgentDefinition).toHaveBeenCalledWith(TENANT_A, AGENT_A))
   })
 
-  it('⛔ 503（platform-ops 数据源未配置）→ 展示「平台运营会话窗未接入」Alert，跨租户盘点如实声明不可用', async () => {
+  it('⛔ 503 → platform-ops 未接入文案；403 → 权限不足文案', async () => {
+    vi.mocked(getPlatformTenants).mockResolvedValue([] as never)
     vi.mocked(getConsoleAgentRegistry).mockRejectedValue(
       new ApiError(503, 'platform-ops session not configured'),
     )
     renderRegistry()
     await waitFor(() =>
-      expect(
-        screen.getAllByText(/platform-ops 数据源未配置/).length,
-      ).toBeGreaterThan(0),
+      expect(screen.getAllByText(/platform-ops 数据源未配置/).length).toBeGreaterThan(0),
     )
     expect(screen.getAllByText(/跨租户盘点不可用/).length).toBeGreaterThan(0)
-  })
 
-  it('⛔ 403 → 提示「权限不足（403）」，与 503 文案不同', async () => {
     vi.mocked(getConsoleAgentRegistry).mockRejectedValue(new ApiError(403, 'forbidden'))
     renderRegistry()
     await waitFor(() => expect(screen.getAllByText(/权限不足（403）/).length).toBeGreaterThan(0))
-    expect(screen.queryAllByText(/platform-ops/)).toHaveLength(0)
   })
 })

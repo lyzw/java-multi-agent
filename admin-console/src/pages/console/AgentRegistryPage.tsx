@@ -38,6 +38,7 @@ import {
   decidePlatformAgentPublishRequest,
   getConsoleAgentRegistry,
   getPlatformAgentDefinition,
+  getPlatformTenants,
   listPlatformAgentRequests,
   listPlatformAgentTenants,
   submitPlatformAgentLifecycleRequest,
@@ -49,9 +50,10 @@ import type {
   PlatformAgentBinding,
   PlatformAgentRegistryItem,
   PlatformRequestItem,
+  PlatformTenant,
   SubmitPublishRequest,
 } from '@/api/types'
-import { lifecycleTag, tagList, timeCell } from '@/pages/catalog/displayBits'
+import { tagList, timeCell } from '@/pages/catalog/displayBits'
 import { AgentDraftPanel } from '@/pages/agents/AgentDraftPanel'
 import { CatalogDetailDrawer, AgentRegistryDetail } from './platformDetailDrawer'
 import { describeCatalogLoadError } from './platformRequestBits'
@@ -97,6 +99,7 @@ type AgentUniqRow = PlatformAgentRegistryItem & { boundTenants: string[] }
 export function AgentRegistryPage(): JSX.Element {
   const { message } = AntApp.useApp()
   const [rows, setRows] = useState<PlatformAgentRegistryItem[]>([])
+  const [tenants, setTenants] = useState<PlatformTenant[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [detailItem, setDetailItem] = useState<PlatformAgentRegistryItem | null>(null)
@@ -132,6 +135,7 @@ export function AgentRegistryPage(): JSX.Element {
   // ── 分配租户：全局 Agent 与租户的多对多绑定 ──
   const [bindingOpen, setBindingOpen] = useState(false)
   const [bindingAgentId, setBindingAgentId] = useState<string>('')
+  const [bindingAgentName, setBindingAgentName] = useState<string>('')
   const [bindingRows, setBindingRows] = useState<PlatformAgentBinding[]>([])
   const [bindingLoading, setBindingLoading] = useState(false)
   const [bindingTenantId, setBindingTenantId] = useState<string>('')
@@ -156,6 +160,11 @@ export function AgentRegistryPage(): JSX.Element {
         if (typeof r.hasOrchestration === 'boolean') existing.hasOrchestration = r.hasOrchestration
         if (r.orchestrationMode && !existing.orchestrationMode) existing.orchestrationMode = r.orchestrationMode
         if (typeof r.tenantCount === 'number') existing.tenantCount = r.tenantCount
+        // 只要任一绑定租户存在未执行申请，就标记该 Agent 为「已修改未发布」
+        if ((r.pendingState === 'PENDING' || r.pendingState === 'APPROVED') && !existing.pendingState) {
+          existing.pendingState = r.pendingState
+          existing.pendingAt = r.pendingAt
+        }
       } else {
         map.set(r.agentId, { ...r, boundTenants: [r.tenantId] })
       }
@@ -169,11 +178,29 @@ export function AgentRegistryPage(): JSX.Element {
 
   const tenantIds = useMemo(() => [...new Set(rows.map((r) => r.tenantId))], [rows])
 
+  // ── 租户名映射：列表/筛选/详情一律以中文名为第一显示，UUID 只在详情里作补充 ──
+  const tenantNameById = useMemo(
+    () => new Map(tenants.map((t) => [t.tenantId, t.name])),
+    [tenants],
+  )
+  const tenantLabel = useCallback(
+    (id: string) => tenantNameById.get(id) ?? id,
+    [tenantNameById],
+  )
+  /** 详情侧「租户名 - 租户 UUID」；查不到名字时如实回退为 UUID。 */
+  const tenantDetailLabel = useCallback(
+    (id: string) => {
+      const name = tenantNameById.get(id)
+      return name ? `${name} - ${id}` : id
+    },
+    [tenantNameById],
+  )
+
   // =================================================================
   // ② 统计面板 —— 运营决策视角
   // =================================================================
   const stats = useMemo(() => {
-    let total = 0, published = 0, deprecated = 0, noDef = 0
+    let total = 0, published = 0, deprecated = 0, noDef = 0, pending = 0
     let noModel = 0, leaf = 0, router = 0, sequential = 0, orchestrator = 0
     let exclusive = 0, shared = 0, reusable = 0
 
@@ -181,6 +208,7 @@ export function AgentRegistryPage(): JSX.Element {
       total++
       if (a.lifecycleState === 'PUBLISHED') published++
       else if (a.lifecycleState === 'DEPRECATED') deprecated++
+      if (a.pendingState === 'PENDING' || a.pendingState === 'APPROVED') pending++
       if (a.defVersion === null) noDef++
       if (!a.modelRef) noModel++
       const mode = (a.orchestrationMode ?? '').toUpperCase()
@@ -195,7 +223,7 @@ export function AgentRegistryPage(): JSX.Element {
     }
     // 修正 exclusive = 恰好 1 个租户
     exclusive = agentUniq.filter((a) => (a.tenantCount ?? 0) === 1).length
-    return { total, published, deprecated, noDef, noModel, leaf, router, sequential, orchestrator, exclusive, shared }
+    return { total, published, deprecated, noDef, pending, noModel, leaf, router, sequential, orchestrator, exclusive, shared }
   }, [agentUniq])
 
   // =================================================================
@@ -210,20 +238,21 @@ export function AgentRegistryPage(): JSX.Element {
       }
       if (tenantFilter !== 'ALL' && !(a as AgentUniqRow).boundTenants.includes(tenantFilter)) return false
       if (q === '') return true
-      // 搜索覆盖：agentId / 名称 / 描述 / 模型 / 编排模式 / 绑定租户 / 角色 / 技能 / 标签 / 技能包
-      if (a.agentId.toLowerCase().includes(q)) return true
+      // 搜索覆盖：名称 / 描述 / 模型 / 编排模式 / 绑定租户名 / 角色 / 技能 / 标签 / 技能包
       if ((a.name ?? '').toLowerCase().includes(q)) return true
       if ((a.description ?? '').toLowerCase().includes(q)) return true
       if ((a.modelRef ?? '').toLowerCase().includes(q)) return true
       if ((a.orchestrationMode ?? '').toLowerCase().includes(q)) return true
-      if ((a as AgentUniqRow).boundTenants.some((t: string) => t.toLowerCase().includes(q))) return true
+      if ((a as AgentUniqRow).boundTenants.some(
+        (t: string) => t.toLowerCase().includes(q) || tenantLabel(t).toLowerCase().includes(q),
+      )) return true
       if (a.roles.some((x) => x.toLowerCase().includes(q))) return true
       if (a.enabledSkills.some((x) => x.toLowerCase().includes(q))) return true
       if (a.capabilityTags.some((x) => x.toLowerCase().includes(q))) return true
       if ((a.skillBundles ?? []).some((x) => x.toLowerCase().includes(q))) return true
       return false
     })
-  }, [agentUniq, search, orchestrationFilter, tenantFilter])
+  }, [agentUniq, search, orchestrationFilter, tenantFilter, tenantLabel])
 
   // =================================================================
   // ④ 加载
@@ -243,6 +272,15 @@ export function AgentRegistryPage(): JSX.Element {
   useEffect(() => {
     void load()
   }, [load])
+
+  // 租户名只用于显示翻译：拉取失败时保持 UUID 回退，不影响注册表本身可用。
+  useEffect(() => {
+    let active = true
+    getPlatformTenants({ limit: 200 })
+      .then((list) => { if (active) setTenants(list) })
+      .catch(() => { /* 列表仍可用，标签回退为 UUID */ })
+    return () => { active = false }
+  }, [])
 
   // =================================================================
   // ⑤ 新增 / 修改 / 停用 / 审批 / 执行 —— 业务动作
@@ -364,6 +402,7 @@ export function AgentRegistryPage(): JSX.Element {
 
   const openBindings = (r: PlatformAgentRegistryItem) => {
     setBindingAgentId(r.agentId)
+    setBindingAgentName(r.name ?? '未命名 Agent')
     setBindingTenantId('')
     setBindingPinnedVersion(null)
     setBindingConfig('{}')
@@ -452,8 +491,20 @@ export function AgentRegistryPage(): JSX.Element {
         </Tooltip>
       )
     }
-    return <Typography.Text code style={{ fontSize: 12 }}>{agent.modelRef}</Typography.Text>
+    return <Typography.Text style={{ fontSize: 12 }}>{agent.modelRef}</Typography.Text>
   }
+
+  /** 生命周期中文标签（列表口径，与目录页共享的英文枚举标签区分开）。 */
+  const registryLifecycleTag = (state: string | null): JSX.Element => {
+    if (state === 'PUBLISHED') return <Tag color="green">已发布</Tag>
+    if (state === 'DEPRECATED') return <Tag color="red">已停用</Tag>
+    if (state === 'VALIDATED') return <Tag color="blue">已校验</Tag>
+    if (state === 'DRAFT') return <Tag color="orange">草稿</Tag>
+    return <Typography.Text type="secondary">未提供</Typography.Text>
+  }
+
+  const tenantNamesOf = (agent: AgentUniqRow): string =>
+    (agent.boundTenants ?? []).map((t) => tenantLabel(t)).join('、')
 
   const tenantCountCell = (agent: AgentUniqRow): JSX.Element => {
     const tc = agent.tenantCount ?? (agent.boundTenants?.length ?? 0)
@@ -462,13 +513,13 @@ export function AgentRegistryPage(): JSX.Element {
     }
     if (tc === 1) {
       return (
-        <Tooltip title={(agent.boundTenants ?? []).join('、')}>
+        <Tooltip title={tenantNamesOf(agent)}>
           <Tag color="blue"><TeamOutlined /> 独占 · 1</Tag>
         </Tooltip>
       )
     }
     return (
-      <Tooltip title={`绑定租户：${(agent.boundTenants ?? []).join('、')}`}>
+      <Tooltip title={`绑定租户：${tenantNamesOf(agent)}`}>
         <Tag color="green"><TeamOutlined /> 复用 · {tc}</Tag>
       </Tooltip>
     )
@@ -480,15 +531,20 @@ export function AgentRegistryPage(): JSX.Element {
   const registryColumns = useMemo<TableColumnsType<AgentUniqRow>>(
     () => [
       {
+        // ⚠️ 列表以中文为第一视角：只显示 Agent 名称，不显示 agentId / 任何 UUID。
         title: 'Agent',
-        dataIndex: 'agentId',
-        width: 240,
+        dataIndex: 'name',
+        width: 220,
         fixed: 'left',
-        render: (v: string, r) => (
+        render: (_, r) => (
           <Space direction="vertical" size={0}>
-            <Typography.Text code style={{ fontSize: 13 }}>{v}</Typography.Text>
-            {(r as AgentUniqRow).name && (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{(r as AgentUniqRow).name}</Typography.Text>
+            <Typography.Text strong style={{ fontSize: 13 }}>
+              {r.name ?? '未命名 Agent'}
+            </Typography.Text>
+            {r.description && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {r.description.length > 24 ? `${r.description.slice(0, 24)}…` : r.description}
+              </Typography.Text>
             )}
           </Space>
         ),
@@ -526,7 +582,25 @@ export function AgentRegistryPage(): JSX.Element {
         title: '生命周期',
         dataIndex: 'lifecycleState',
         width: 110,
-        render: (v: string | null) => lifecycleTag(v),
+        render: (v: string | null) => registryLifecycleTag(v),
+      },
+      {
+        // 修改已提交但尚未执行时，权威定义仍是旧版本 —— 必须显式标识，避免误判为已发布。
+        title: '发布状态',
+        key: 'publishState',
+        width: 140,
+        render: (_, r) =>
+          r.pendingState === 'PENDING' || r.pendingState === 'APPROVED' ? (
+            <Tooltip title={
+              r.pendingState === 'PENDING'
+                ? '变更申请待审批，当前定义仍是上一个已发布版本'
+                : '变更申请已批准待执行，执行后新版本才生效'
+            }>
+              <Tag color="orange">已修改未发布</Tag>
+            </Tooltip>
+          ) : (
+            <Typography.Text type="secondary">无待发布</Typography.Text>
+          ),
       },
       {
         title: '发布版本',
@@ -643,17 +717,26 @@ export function AgentRegistryPage(): JSX.Element {
         },
       },
     ],
-    [agentUniq],
+    [agentUniq, tenantLabel],
   )
 
   // =================================================================
-  // ⑧ 申请队列列
+  // ⑧ 申请队列列（中文优先，UUID 不直接出现在列表）
   // =================================================================
+  const operationText = (v: string): string =>
+    v === 'PUBLISH' ? '发布' : v === 'LIFECYCLE_TRANSITION' ? '停用/生命周期' : v === 'ROLLBACK' ? '回滚' : v
+  const requestStateText = (v: string): string =>
+    v === 'PENDING' ? '待审批' : v === 'APPROVED' ? '已批准·待执行' : v === 'APPLIED'
+      ? '已生效' : v === 'REJECTED' ? '已驳回' : v === 'FAILED' ? '执行失败' : v
+
   const queueColumns: TableColumnsType<PlatformRequestItem> = [
-    { title: 'requestId', dataIndex: 'requestId', width: 130, render: (v: string) => <Typography.Text code>{v.slice(0, 12)}…</Typography.Text> },
-    { title: '操作', dataIndex: 'operation', width: 150 },
-    { title: '状态', dataIndex: 'state', width: 110, render: (v: string) => <Tag color={v === 'APPLIED' ? 'green' : v === 'PENDING' ? 'blue' : v === 'REJECTED' || v === 'FAILED' ? 'red' : 'gold'}>{v}</Tag> },
-    { title: '申请人', dataIndex: 'requesterId', width: 150, ellipsis: true },
+    { title: '序号', key: 'seq', width: 80, render: (_, __, i: number) => <Typography.Text>#{i + 1}</Typography.Text> },
+    { title: '操作', dataIndex: 'operation', width: 150, render: (v: string) => <Tag color="geekblue">{operationText(v)}</Tag> },
+    { title: '状态', dataIndex: 'state', width: 130, render: (v: string) => <Tag color={v === 'APPLIED' ? 'green' : v === 'PENDING' ? 'orange' : v === 'REJECTED' || v === 'FAILED' ? 'red' : 'blue'}>{requestStateText(v)}</Tag> },
+    {
+      title: '申请人', dataIndex: 'requesterId', width: 120,
+      render: (v: string) => <Tooltip title={v}><Tag>运营人员</Tag></Tooltip>,
+    },
     { title: '申请时间', dataIndex: 'requestedAt', width: 170, render: (v: string) => timeCell(v) },
     {
       title: '操作',
@@ -686,7 +769,7 @@ export function AgentRegistryPage(): JSX.Element {
         showIcon
         style={{ marginBottom: 16 }}
         message="Agent 是全局智能体实体；运营统一维护定义与租户绑定关系"
-        description="本页以 Agent 身份为主视角聚合：每行 = 一个 Agent 的完整画像（绑定多少租户、用哪个模型、编排模式、能力清单）。新增 / 修改走同一张草稿表单（流程按发布策略分流）；「删除」= 停用（DEPRECATED 单向终态）。"
+        description="本页以 Agent 身份为主视角聚合：每行 = 一个 Agent 的完整画像（绑定多少租户、用哪个模型、编排模式、能力清单）。列表只显示中文名称，UUID 仅在详情里作辅助标识。新增 / 修改走同一张草稿表单（流程按发布策略分流）；申请已提交但尚未执行的 Agent 会标记「已修改未发布」；「删除」= 停用（DEPRECATED 单向终态）。"
       />
       {error && (
         <Alert type="error" showIcon style={{ marginBottom: 16 }} message="Agent 注册表不可用" description={error} />
@@ -702,6 +785,13 @@ export function AgentRegistryPage(): JSX.Element {
         <Col xs={12} sm={6}>
           <Card size="small" variant="borderless" style={{ background: '#f6ffed' }}>
             <Statistic loading={loading} title="已发布" value={stats.published} valueStyle={{ color: '#389e0d' }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6}>
+          <Card size="small" variant="borderless" style={{ background: '#fff7e6' }}>
+            <Tooltip title="变更申请已提交但尚未执行，当前生效定义仍是上一个版本">
+              <Statistic loading={loading} title="已修改未发布" value={stats.pending} valueStyle={{ color: '#d46b08' }} />
+            </Tooltip>
           </Card>
         </Col>
         <Col xs={12} sm={6}>
@@ -759,7 +849,7 @@ export function AgentRegistryPage(): JSX.Element {
           <Input
             allowClear
             prefix={<SearchOutlined />}
-            placeholder="搜索 agentId / 名称 / 模型 / 编排模式 / 租户 / 角色 / 技能 / 标签 / 技能包"
+            placeholder="搜索名称 / 描述 / 模型 / 编排模式 / 租户 / 角色 / 技能 / 标签 / 技能包"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ maxWidth: 420 }}
@@ -781,7 +871,7 @@ export function AgentRegistryPage(): JSX.Element {
             style={{ width: 220 }}
             options={[
               { value: 'ALL', label: '全部租户' },
-              ...tenantIds.map((t) => ({ value: t, label: t })),
+              ...tenantIds.map((t) => ({ value: t, label: tenantLabel(t) })),
             ]}
           />
           <Typography.Text type="secondary">共 {filtered.length} 个 Agent</Typography.Text>
@@ -805,20 +895,28 @@ export function AgentRegistryPage(): JSX.Element {
         title={
           <Space>
             <RobotOutlined />
-            <Typography.Text code>{detailItem?.agentId ?? 'Agent 详情'}</Typography.Text>
-            {detailItem?.name && <Typography.Text type="secondary">{detailItem.name}</Typography.Text>}
+            <Typography.Text strong>{detailItem?.name ?? '未命名 Agent'}</Typography.Text>
           </Space>
         }
         open={detailItem !== null}
         onClose={() => setDetailItem(null)}
       >
-        {detailItem !== null ? <AgentRegistryDetail item={detailItem} agentUniq={agentUniq} /> : null}
+        {detailItem !== null ? (
+          <AgentRegistryDetail
+            item={detailItem}
+            agentUniq={agentUniq}
+            tenantNameOf={tenantLabel}
+            tenantDetailOf={tenantDetailLabel}
+          />
+        ) : null}
       </CatalogDetailDrawer>
 
       {/* ── 新增 / 修改：与租户侧同一张 AgentDraftPanel ── */}
       <Modal
         open={editorOpen}
-        title={editorMode === 'create' ? '新建 Agent（运营代租户配置）' : `修改 Agent（${editorAgentId}）`}
+        title={editorMode === 'create'
+          ? '新建 Agent（运营代租户配置）'
+          : `修改 Agent（${editorLegacy?.name ?? '未命名 Agent'}）`}
         onCancel={() => setEditorOpen(false)}
         width={960}
         footer={null}
@@ -835,7 +933,7 @@ export function AgentRegistryPage(): JSX.Element {
               onChange={(v) => setEditorTenantId(v)}
               allowClear
               placeholder="留空 = 全局 Agent（不绑定租户）"
-              options={[...new Set([...tenantIds, editorTenantId].filter(Boolean))].map((t) => ({ value: t, label: t }))}
+              options={[...new Set([...tenantIds, editorTenantId].filter(Boolean))].map((t) => ({ value: t, label: tenantLabel(t) }))}
               disabled={editorMode === 'edit' || loadingDefinition}
             />
           </Form.Item>
@@ -864,7 +962,7 @@ export function AgentRegistryPage(): JSX.Element {
       {/* ── 停用：理由弹窗 ── */}
       <Modal
         open={deprecateTarget !== null}
-        title={`停用 Agent（${deprecateTarget?.agentId ?? ''}）`}
+        title={`停用 Agent（${deprecateTarget?.name ?? '未命名 Agent'}）`}
         okText="提交停用申请"
         okButtonProps={{ danger: true, loading: deprecating }}
         cancelText="取消"
@@ -905,7 +1003,7 @@ export function AgentRegistryPage(): JSX.Element {
             style={{ width: 260 }}
             options={[
               { value: GLOBAL_QUEUE_TENANT, label: '全局申请（无租户 · PLATFORM）' },
-              ...[...new Set([...tenantIds, queueTenantId].filter(Boolean))].map((t) => ({ value: t, label: t })),
+              ...[...new Set([...tenantIds, queueTenantId].filter(Boolean))].map((t) => ({ value: t, label: tenantLabel(t) })),
             ]}
           />
           <Select
@@ -941,7 +1039,7 @@ export function AgentRegistryPage(): JSX.Element {
 
       {/* ── 分配租户：多对多绑定（直接 CRUD，不走发布工作流）── */}
       <Drawer
-        title={`分配租户（Agent ${bindingAgentId || ''}）`}
+        title={`分配租户（Agent ${bindingAgentName || '未命名 Agent'}）`}
         open={bindingOpen}
         onClose={() => setBindingOpen(false)}
         width={900}
@@ -958,7 +1056,7 @@ export function AgentRegistryPage(): JSX.Element {
             onChange={(v) => setBindingTenantId(v)}
             placeholder="选择租户"
             style={{ width: 260 }}
-            options={[...new Set([...tenantIds, bindingTenantId].filter(Boolean))].map((t) => ({ value: t, label: t }))}
+            options={[...new Set([...tenantIds, bindingTenantId].filter(Boolean))].map((t) => ({ value: t, label: tenantLabel(t) }))}
           />
           <InputNumber
             min={1}
@@ -985,7 +1083,7 @@ export function AgentRegistryPage(): JSX.Element {
           pagination={false}
           size="small"
           columns={[
-            { title: '租户', dataIndex: 'tenantId', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
+            { title: '租户', dataIndex: 'tenantId', render: (v: string) => tenantLabel(v) },
             { title: '状态', dataIndex: 'status', render: (v: string) => <Tag color={v === 'ACTIVE' ? 'green' : 'default'}>{v}</Tag> },
             { title: '固定版本', dataIndex: 'pinnedVersion', render: (v: number | null) => (v === null ? '跟随发布头' : `v${v}`) },
             { title: '配置', dataIndex: 'config', ellipsis: true },

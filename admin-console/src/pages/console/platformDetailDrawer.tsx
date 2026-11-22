@@ -10,12 +10,15 @@
  * <p><b>⚠️ 三类对象三种取数</b>：Tool / Skill / MCP Server 有平台链单条 +
  * 关系端点（{@code GET /capabilities/{kind}/{id}}、{@code /relations}）；
  * Agent 注册表**只有列表盘点**（禁区红线：定义正文不出租户边界），
- * 详情直接用**行内已有字段**渲染，不发任何请求。
+ * 身份画像直接用**行内已有字段**渲染；仅「历史变更记录」按需发一次
+ * 元数据请求（{@code /agents/{id}/changes}），仍不含定义正文。
  */
 
-import { useEffect, useState, type ReactNode } from 'react'
-import { Alert, Descriptions, Divider, Drawer, Space, Spin, Tag, Typography } from 'antd'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Alert, Descriptions, Divider, Drawer, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd'
+import type { TableColumnsType } from 'antd'
 import {
+  getConsoleAgentChanges,
   getConsoleMcp,
   getConsoleMcpRelations,
   getConsoleSkill,
@@ -24,6 +27,7 @@ import {
   getConsoleToolRelations,
 } from '@/api/adminApi'
 import type {
+  PlatformAgentChange,
   PlatformAgentRegistryItem,
   ToolCatalogItem,
   ToolRelations,
@@ -348,12 +352,23 @@ export function McpCatalogDetail({ id }: { id: string }): JSX.Element {
 export function AgentRegistryDetail({
   item,
   agentUniq,
+  tenantNameOf = (id) => id,
+  tenantDetailOf,
 }: {
   item: PlatformAgentRegistryItem
   agentUniq: Array<PlatformAgentRegistryItem & { boundTenants: string[] }>
+  /** 租户 UUID → 中文名（列表页已加载，避免详情重复拉取租户清单） */
+  tenantNameOf?: (id: string) => string
+  /** 详情里「租户名 - UUID」的完整标签；缺省退化为 UUID */
+  tenantDetailOf?: (id: string) => string
 }): JSX.Element {
   const full = agentUniq.find((a) => a.agentId === item.agentId) ?? { ...item, boundTenants: [item.tenantId] }
   const mode = (full.orchestrationMode ?? '').toUpperCase() || 'LEAF'
+  const pending = full.pendingState === 'PENDING' || full.pendingState === 'APPROVED'
+  const detailLabelOf = tenantDetailOf ?? ((id: string) => {
+    const name = tenantNameOf(id)
+    return name === id ? id : `${name} - ${id}`
+  })
   return (
     <>
       {/* ── 第一块：Agent 身份画像（2 列）── */}
@@ -374,7 +389,16 @@ export function AgentRegistryDetail({
            : mode === 'SEQUENTIAL' ? <Tag color="orange">SEQUENTIAL 串行</Tag>
            : <Tag>{mode}</Tag>}
         </Descriptions.Item>
-        <Descriptions.Item label="生命周期">{lifecycleTag(full.lifecycleState)}</Descriptions.Item>
+        <Descriptions.Item label="生命周期">{agentLifecycleTag(full.lifecycleState)}</Descriptions.Item>
+        <Descriptions.Item label="发布状态">
+          {pending ? (
+            <Tag color="orange">
+              {full.pendingState === 'APPROVED' ? '已修改未发布（待执行）' : '已修改未发布（待审批）'}
+            </Tag>
+          ) : (
+            <Typography.Text type="secondary">无待发布变更</Typography.Text>
+          )}
+        </Descriptions.Item>
         <Descriptions.Item label="定义版本">
           {full.defVersion === null
             ? <Typography.Text type="secondary">无定义</Typography.Text>
@@ -418,10 +442,13 @@ export function AgentRegistryDetail({
       ) : (
         full.boundTenants.map((t) => (
           <Tag key={t} color="blue" style={{ margin: 4, fontSize: 12 }}>
-            <Typography.Text code>{t}</Typography.Text>
+            {detailLabelOf(t)}
           </Tag>
         ))
       )}
+
+      {/* ── 第四块：历史变更记录（按需取管理元数据，不含定义正文）── */}
+      <AgentChangeHistory agentId={full.agentId} tenantNameOf={tenantNameOf} />
 
       <Alert
         type="warning"
@@ -430,6 +457,120 @@ export function AgentRegistryDetail({
         message="禁区红线"
         description="Agent 的定义正文（instructions / orchestration / generationParams）、运行输出与会话内容不跨租户出平台边界；本详情只呈现管理元数据，缺失字段按「未提供」如实呈现。"
       />
+    </>
+  )
+}
+
+/** Agent 生命周期中文标签（注册表口径）。 */
+function agentLifecycleTag(state: string | null | undefined): ReactNode {
+  if (state === 'PUBLISHED') return <Tag color="green">已发布</Tag>
+  if (state === 'DEPRECATED') return <Tag color="red">已停用</Tag>
+  if (state === 'VALIDATED') return <Tag color="blue">已校验</Tag>
+  if (state === 'DRAFT') return <Tag color="orange">草稿</Tag>
+  return <Typography.Text type="secondary">未提供</Typography.Text>
+}
+
+/** 变更动作 / 状态 → 中文（UUID 与英文枚举不直接出现在详情列表）。 */
+function changeActionText(action: string): string {
+  if (action === 'PUBLISH') return '定义发布'
+  if (action === 'LIFECYCLE_TRANSITION') return '生命周期'
+  if (action === 'ROLLBACK') return '回滚'
+  if (action.includes('agent_config.create')) return '创建 Agent'
+  if (action.includes('binding.bind')) return '分配租户'
+  if (action.includes('binding.unbind')) return '停用分配'
+  if (action.includes('binding.update')) return '更新分配'
+  if (action.includes('publish.request')) return '发布申请'
+  if (action.includes('publish.decision')) return '变更审批'
+  if (action.includes('publish.apply')) return '执行变更'
+  if (action.includes('deprecate')) return '停用申请'
+  return action
+}
+
+function changeStateText(state: string): string {
+  if (state === 'PENDING') return '待审批'
+  if (state === 'APPROVED') return '已批准·待执行'
+  if (state === 'APPLIED') return '已生效'
+  if (state === 'REJECTED') return '已驳回'
+  if (state === 'FAILED') return '执行失败'
+  return state
+}
+
+/** Agent 历史变更记录：发布申请单 + 建行 / 分配租户等直接配置动作。 */
+function AgentChangeHistory({
+  agentId,
+  tenantNameOf,
+}: {
+  agentId: string
+  tenantNameOf: (id: string) => string
+}): JSX.Element {
+  const [changes, setChanges] = useState<PlatformAgentChange[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    setError(null)
+    getConsoleAgentChanges(agentId, 20)
+      .then((list) => { if (active) setChanges(list) })
+      .catch((e: unknown) => {
+        if (active) setError(e instanceof Error ? e.message : '加载变更记录失败')
+      })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [agentId])
+
+  const columns = useMemo<TableColumnsType<PlatformAgentChange>>(
+    () => [
+      {
+        title: '变更类型', dataIndex: 'action', width: 120,
+        render: (v: string, r) => <Tag color={r.category === 'AUDIT' ? 'geekblue' : 'blue'}>{changeActionText(v)}</Tag>,
+      },
+      {
+        title: '状态', dataIndex: 'state', width: 130,
+        render: (v: string) => <Tag color={v === 'APPLIED' ? 'green' : v === 'PENDING' ? 'orange' : v === 'APPROVED' ? 'blue' : 'red'}>{changeStateText(v)}</Tag>,
+      },
+      {
+        title: '目标版本', dataIndex: 'targetVersion', width: 90,
+        render: (v: number | null) => (v === null ? '-' : `v${v}`),
+      },
+      {
+        title: '租户', dataIndex: 'tenantId', width: 140, ellipsis: true,
+        render: (v: string | null) => (v ? tenantNameOf(v) : '全局'),
+      },
+      {
+        title: '变更理由', dataIndex: 'reason', ellipsis: true,
+        render: (v: string) => <Tooltip title={v}>{v}</Tooltip>,
+      },
+      {
+        title: '申请人', dataIndex: 'actorId', width: 110,
+        render: (v: string) => <Tooltip title={v}><Typography.Text>运营人员</Typography.Text></Tooltip>,
+      },
+      { title: '时间', dataIndex: 'requestedAt', width: 160, render: (v: string) => timeCell(v) },
+    ],
+    [tenantNameOf],
+  )
+
+  return (
+    <>
+      <DetailSubTitle>历史变更记录（最近 20 条）</DetailSubTitle>
+      {error !== null ? (
+        <Alert type="error" showIcon message="变更记录加载失败" description={error} />
+      ) : (
+        <Table<PlatformAgentChange>
+          rowKey="changeId"
+          size="small"
+          loading={loading}
+          dataSource={changes}
+          columns={columns}
+          pagination={false}
+          scroll={{ x: 860 }}
+          locale={{ emptyText: loading ? '加载中…' : '暂无变更记录' }}
+        />
+      )}
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        仅展示定义发布 / 生命周期 / 租户分配等管理动作元数据；定义正文、运行输出与会话内容不出平台边界。
+      </Typography.Text>
     </>
   )
 }

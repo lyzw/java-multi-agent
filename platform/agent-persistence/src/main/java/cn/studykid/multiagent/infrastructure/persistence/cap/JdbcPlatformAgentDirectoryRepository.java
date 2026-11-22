@@ -18,6 +18,7 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import cn.studykid.multiagent.ports.persistence.cap.PlatformAgentDirectoryPort;
+import cn.studykid.multiagent.ports.persistence.cap.PlatformAgentDirectoryPort.PlatformAgentChange;
 
 /**
  * {@link PlatformAgentDirectoryPort} 的 PostgreSQL 实现（第三十九批 · Agent 视角扩展）。
@@ -70,7 +71,9 @@ public class JdbcPlatformAgentDirectoryRepository implements PlatformAgentDirect
                    d.instructions           AS def_instructions,
                    d.orchestration          AS def_orchestration,
                    om.mode                  AS orchestration_mode,
-                   COALESCE(tc.tenant_count, 0) AS tenant_count
+                   COALESCE(tc.tenant_count, 0) AS tenant_count,
+                   pc.pending_state         AS pending_state,
+                   pc.pending_at            AS pending_at
             FROM tenant_agent_binding b
             JOIN agent a ON a.agent_id = b.agent_id
             LEFT JOIN LATERAL (
@@ -109,9 +112,62 @@ public class JdbcPlatformAgentDirectoryRepository implements PlatformAgentDirect
                 WHERE status = 'ACTIVE'
                 GROUP BY agent_id
             ) tc ON tc.agent_id = a.agent_id
+            -- 「已修改未发布」= 存在 PENDING / APPROVED 且尚未执行的申请单。
+            -- 申请单 payload 存 JSON 原文：PUBLISH 看 agents[].agentId，
+            -- LIFECYCLE_TRANSITION 看 lifecycle.objectId；resource_kind/id 兼容草稿分流写入。
+            LEFT JOIN LATERAL (
+                SELECT pr.state AS pending_state, pr.requested_at AS pending_at
+                FROM cap_config_publish_request pr
+                WHERE pr.state IN ('PENDING', 'APPROVED')
+                  AND (
+                        EXISTS (
+                            SELECT 1
+                            FROM jsonb_array_elements(
+                                CASE WHEN jsonb_typeof(pr.payload::jsonb -> 'agents') = 'array'
+                                     THEN pr.payload::jsonb -> 'agents'
+                                     ELSE '[]'::jsonb END) ag
+                            WHERE ag ->> 'agentId' = a.agent_id::text
+                        )
+                     OR pr.payload::jsonb -> 'lifecycle' ->> 'objectId' = a.agent_id::text
+                     OR (pr.resource_kind = 'AGENT' AND pr.resource_id = a.agent_id::text)
+                  )
+                ORDER BY pr.requested_at DESC
+                LIMIT 1
+            ) pc ON TRUE
             WHERE b.status = 'ACTIVE'
               AND (?::uuid IS NULL OR b.tenant_id = ?::uuid)
             ORDER BY b.tenant_id, a.name, a.agent_id
+            """;
+
+    /**
+     * 变更历史 SQL：只从申请单读管理元数据（动作 / 状态 / 理由 / 申请人 / 时间 / 目标版本），
+     * 定义正文永远不出平台边界。申请单 payload 为 JSON 原文，用 jsonb 精确匹配 agentId，
+     * 避免把「同批次里其它 Agent 的申请」误算到本 Agent 头上。
+     */
+    private static final String CHANGES_SQL = """
+            SELECT pr.request_id::text       AS change_id,
+                   'CONFIG'                  AS category,
+                   pr.tenant_id::text        AS tenant_id,
+                   pr.operation              AS action,
+                   pr.state                  AS state,
+                   pr.target_version         AS target_version,
+                   pr.reason                 AS reason,
+                   pr.requester_id           AS actor_id,
+                   pr.requested_at           AS requested_at,
+                   pr.applied_at             AS applied_at
+            FROM cap_config_publish_request pr
+            WHERE EXISTS (
+                      SELECT 1
+                      FROM jsonb_array_elements(
+                          CASE WHEN jsonb_typeof(pr.payload::jsonb -> 'agents') = 'array'
+                               THEN pr.payload::jsonb -> 'agents'
+                               ELSE '[]'::jsonb END) ag
+                      WHERE ag ->> 'agentId' = ?
+                  )
+               OR pr.payload::jsonb -> 'lifecycle' ->> 'objectId' = ?
+               OR (pr.resource_kind = 'AGENT' AND pr.resource_id = ?)
+            ORDER BY pr.requested_at DESC
+            LIMIT ?
             """;
 
     @Override
@@ -129,6 +185,39 @@ public class JdbcPlatformAgentDirectoryRepository implements PlatformAgentDirect
             return rows;
         } catch (SQLException e) {
             throw new IllegalStateException("查询跨租户 Agent 注册表失败", e);
+        }
+    }
+
+    @Override
+    public @NonNull List<PlatformAgentChange> listAgentChanges(@NonNull String agentId, int limit) {
+        List<PlatformAgentChange> changes = new ArrayList<>();
+        int size = Math.max(1, Math.min(limit, 200));
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(CHANGES_SQL)) {
+            ps.setString(1, agentId);
+            ps.setString(2, agentId);
+            ps.setString(3, agentId);
+            ps.setInt(4, size);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Timestamp requestedAt = rs.getTimestamp("requested_at");
+                    Timestamp appliedAt = rs.getTimestamp("applied_at");
+                    changes.add(new PlatformAgentChange(
+                            rs.getString("change_id"),
+                            rs.getString("category"),
+                            rs.getString("tenant_id"),
+                            rs.getString("action"),
+                            rs.getString("state"),
+                            (Integer) rs.getObject("target_version"),
+                            rs.getString("reason"),
+                            rs.getString("actor_id"),
+                            requestedAt == null ? Instant.EPOCH : requestedAt.toInstant(),
+                            appliedAt == null ? null : appliedAt.toInstant()));
+                }
+            }
+            return changes;
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询 Agent 变更历史失败", e);
         }
     }
 
@@ -153,7 +242,10 @@ public class JdbcPlatformAgentDirectoryRepository implements PlatformAgentDirect
                 hasNonEmptyJson(rs.getString("def_instructions")),
                 hasNonEmptyJson(rs.getString("def_orchestration")),
                 rs.getString("orchestration_mode"),
-                rs.getInt("tenant_count"));
+                rs.getInt("tenant_count"),
+                rs.getString("pending_state"),
+                rs.getTimestamp("pending_at") == null
+                        ? null : rs.getTimestamp("pending_at").toInstant());
     }
 
     /** JSON 数组文本 → 列表；异常显式上抛（解析失败不静默清空）。 */

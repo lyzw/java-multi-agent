@@ -2,8 +2,11 @@ package cn.studykid.multiagent.api.platform;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -36,11 +39,13 @@ import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
 import cn.studykid.multiagent.application.cap.ConfigLifecycleService;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort.PlatformAuditEvent;
+import cn.studykid.multiagent.ports.audit.PlatformAuditPort.PlatformAuditQuery;
 import cn.studykid.multiagent.ports.persistence.Page;
 import cn.studykid.multiagent.ports.persistence.PlatformOpsSessionPort;
 import cn.studykid.multiagent.ports.persistence.PlatformOpsUnavailableException;
 import cn.studykid.multiagent.ports.persistence.cap.PlatformAgentDirectoryPort;
 import cn.studykid.multiagent.ports.persistence.cap.PlatformAgentDirectoryPort.PlatformAgentRow;
+import cn.studykid.multiagent.ports.persistence.cap.PlatformAgentDirectoryPort.PlatformAgentChange;
 import cn.studykid.multiagent.ports.persistence.CapMcpServerDefPort;
 import cn.studykid.multiagent.ports.persistence.CapSkillDefPort;
 import cn.studykid.multiagent.ports.persistence.CapToolDefPort;
@@ -261,6 +266,40 @@ public class PlatformCapabilityConsoleController {
         //    （fail-closed）；真实 SQL 故障落入兜底 500（语义正确）。
         return ResponseEntity.ok(rows.stream().map(AgentRowDto::of).toList());
     }
+
+    /**
+     * Agent 变更历史（需 platform.resource.read）：发布申请单 + 平台审计里的建行 / 绑定动作。
+     *
+     * <p>⚠️ 只回变更元数据（动作 / 状态 / 理由 / 申请人 / 时间 / 目标版本）；
+     * 定义正文、运行输出、会话内容一律不出平台边界。
+     */
+    @GetMapping("/agents/{agentId}/changes")
+    public ResponseEntity<List<AgentChangeDto>> listAgentChanges(
+            @RequestAttribute(IdentityDomains.PLATFORM_PRINCIPAL_REQUEST_ATTRIBUTE)
+            PlatformPrincipal principal,
+            @PathVariable String agentId,
+            @RequestParam(required = false) @Nullable Integer limit) {
+        security.require(principal, Namespaces.Platform.RESOURCE_READ, "agent_registry", agentId);
+        if (!isUuid(agentId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "agentId 须为 UUID");
+        }
+        int size = limit == null ? 20 : Math.max(1, Math.min(limit, 200));
+        List<AgentChangeDto> changes = new ArrayList<>();
+        platformOps.inPlatformScopeSession(
+                () -> agentDirectory.listAgentChanges(agentId, size).stream()
+                        .map(AgentChangeDto::of).toList())
+                .forEach(changes::add);
+        // 建行 / 分配租户等直接配置动作不在申请单里，从平台审计补齐（只按 agentId 过滤）。
+        audit.query(new PlatformAuditQuery(null, null, "agent_config", agentId,
+                null, null, size, null)).stream()
+                .filter(e -> e.reasonCode() != null && e.reasonCode().startsWith("agent_config."))
+                .map(AgentChangeDto::of)
+                .forEach(changes::add);
+        changes.sort(Comparator.comparing(AgentChangeDto::requestedAt).reversed());
+        return ResponseEntity.ok(changes.stream().limit(size).toList());
+    }
+
+    private static final Pattern AUDIT_TENANT = Pattern.compile("tenant=([0-9a-fA-F-]{36})");
 
     private static boolean isUuid(String value) {
         try {
@@ -579,14 +618,38 @@ public class PlatformCapabilityConsoleController {
                               @NonNull List<String> capabilityTags, boolean hasOverrides,
                               @Nullable String modelRef, @NonNull List<String> skillBundles,
                               boolean hasInstructions, boolean hasOrchestration,
-                              @Nullable String orchestrationMode, int tenantCount) {
+                              @Nullable String orchestrationMode, int tenantCount,
+                              @Nullable String pendingState, @Nullable Instant pendingAt) {
         static AgentRowDto of(PlatformAgentRow r) {
             return new AgentRowDto(r.tenantId(), r.agentId(), r.name(), r.description(),
                     r.versionCount(), r.latestVersionNumber(), r.latestPublishedAt(),
                     r.defVersion(), r.lifecycleState(), r.roles(), r.enabledSkills(),
                     r.capabilityTags(), r.hasOverrides(),
                     r.modelRef(), r.skillBundles(), r.hasInstructions(), r.hasOrchestration(),
-                    r.orchestrationMode(), r.tenantCount());
+                    r.orchestrationMode(), r.tenantCount(), r.pendingState(), r.pendingAt());
+        }
+    }
+
+    /** Agent 变更记录视图（管理元数据，绝无定义正文）。 */
+    public record AgentChangeDto(@NonNull String changeId, @NonNull String category,
+                                 @Nullable String tenantId, @NonNull String action,
+                                 @NonNull String state, @Nullable Integer targetVersion,
+                                 @NonNull String reason, @NonNull String actorId,
+                                 @NonNull Instant requestedAt, @Nullable Instant appliedAt) {
+        static AgentChangeDto of(PlatformAgentChange c) {
+            return new AgentChangeDto(c.changeId(), c.category(), c.tenantId(), c.action(),
+                    c.state(), c.targetVersion(), c.reason(), c.actorId(),
+                    c.requestedAt(), c.appliedAt());
+        }
+
+        /** 平台审计事件 → 变更记录（建行 / 分配 / 停用分配等直接配置动作）。 */
+        static AgentChangeDto of(PlatformAuditEvent e) {
+            String detail = e.action();
+            String action = e.reasonCode() == null ? detail : e.reasonCode();
+            Matcher matcher = AUDIT_TENANT.matcher(detail);
+            String tenantId = matcher.find() ? matcher.group(1) : null;
+            return new AgentChangeDto(e.id().toString(), "AUDIT", tenantId, action,
+                    "APPLIED", null, detail, e.actorId(), e.occurredAt(), null);
         }
     }
 

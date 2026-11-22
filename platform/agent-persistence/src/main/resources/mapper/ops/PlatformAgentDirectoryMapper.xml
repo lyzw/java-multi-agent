@@ -28,7 +28,9 @@
                d.instructions::text     AS defInstructions,
                d.orchestration::text    AS defOrchestration,
                om.mode                  AS orchestrationMode,
-               COALESCE(tc.tenant_count, 0) AS tenantCount
+               COALESCE(tc.tenant_count, 0) AS tenantCount,
+               pc.pending_state         AS pendingState,
+               pc.pending_at            AS pendingAt
         FROM tenant_agent_binding b
         JOIN agent a ON a.agent_id = b.agent_id
         LEFT JOIN LATERAL (
@@ -65,8 +67,55 @@
             WHERE status = 'ACTIVE'
             GROUP BY agent_id
         ) tc ON tc.agent_id = a.agent_id
+        <!-- 「已修改未发布」= 存在 PENDING / APPROVED 且尚未执行的申请单 -->
+        LEFT JOIN LATERAL (
+            SELECT pr.state AS pending_state, pr.requested_at AS pending_at
+            FROM cap_config_publish_request pr
+            WHERE pr.state IN ('PENDING', 'APPROVED')
+              AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(
+                            CASE WHEN jsonb_typeof(pr.payload::jsonb -> 'agents') = 'array'
+                                 THEN pr.payload::jsonb -> 'agents'
+                                 ELSE '[]'::jsonb END) ag
+                        WHERE ag ->> 'agentId' = a.agent_id::text
+                    )
+                 OR pr.payload::jsonb -> 'lifecycle' ->> 'objectId' = a.agent_id::text
+                 OR (pr.resource_kind = 'AGENT' AND pr.resource_id = a.agent_id::text)
+              )
+            ORDER BY pr.requested_at DESC LIMIT 1
+        ) pc ON TRUE
         WHERE b.status = 'ACTIVE'
           AND (#{tenantIdFilter}::uuid IS NULL OR b.tenant_id = #{tenantIdFilter}::uuid)
         ORDER BY b.tenant_id, a.name, a.agent_id
+    </select>
+
+    <!-- Agent 变更历史：只回管理元数据，定义正文永不出平台边界 -->
+    <select id="listAgentChanges"
+            resultType="cn.studykid.multiagent.infrastructure.persistence.mapper.PlatformAgentDirectoryMapper$PlatformAgentChangeRow">
+        SELECT pr.request_id::text  AS changeId,
+               'CONFIG'             AS category,
+               pr.tenant_id::text   AS tenantId,
+               pr.operation         AS action,
+               pr.state             AS state,
+               pr.target_version    AS targetVersion,
+               pr.reason            AS reason,
+               pr.requester_id      AS actorId,
+               pr.requested_at      AS requestedAt,
+               pr.applied_at        AS appliedAt
+        FROM cap_config_publish_request pr
+        WHERE EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(
+                      CASE WHEN jsonb_typeof(pr.payload::jsonb -> 'agents') = 'array'
+                           THEN pr.payload::jsonb -> 'agents'
+                           ELSE '[]'::jsonb END) ag
+                  WHERE ag ->> 'agentId' = #{agentId}
+              )
+           OR pr.payload::jsonb -> 'lifecycle' ->> 'objectId' = #{agentId}
+           OR (pr.resource_kind = 'AGENT' AND pr.resource_id = #{agentId})
+        ORDER BY pr.requested_at DESC
+        LIMIT #{limit}
     </select>
 </mapper>

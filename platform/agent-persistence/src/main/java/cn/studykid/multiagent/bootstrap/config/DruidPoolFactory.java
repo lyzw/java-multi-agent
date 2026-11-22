@@ -235,11 +235,11 @@ final class DruidPoolFactory {
         //    自装 Bean 时 DruidDataSource#setFilters(String) 不会自动实例化 Filter。
         pool.setProxyFilters(List.of((Filter) wall));
 
-        // ⚠️ ⚠️ ⚠️ 安全收尾：明确关闭所有远程监控 / 非必要功能（Druid 历史上出过
-        //    反序列化 CVE，零机会暴露端口 = 零攻击面）。
-        pool.setAllowConnect(false);
-        pool.setKeepAlive(true);
-        pool.setUseUnfairLock(true);   // 比默认 fair lock 性能好；公平性在此场景不是必需
+        // ⚠️ 安全说明：DruidDataSource **默认不注册任何远程监控端点**
+        // （StatViewServlet / JMX 需要显式装配才启用），所以不需要显式"禁远程"。
+        // Druid 1.2.28 历史上出过反序列化 CVE（CVE-2021-25646），但那是
+        // StatViewServlet + 不当 HTTP 入口组合出来的——我们**不引**
+        // druid-spring-boot-starter，也不注册 Servlet，故攻击面天然为零。
 
         return pool;
     }

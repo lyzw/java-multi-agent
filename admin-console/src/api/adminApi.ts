@@ -56,6 +56,7 @@ import type {
   UpdatePlatformUserRequest,
   UserRolesResponse,
   PlatformAgentRegistryItem,
+  PlatformAgentChange,
   PlatformPermissionSummary,
   PlatformCreateAgentRequest,
   PlatformAgentCreated,
@@ -564,6 +565,17 @@ export function getConsoleAgentRegistry(params?: {
   const q = qs.toString()
   return request<PlatformAgentRegistryItem[]>(
     `/platform/v1/capabilities/agents${q ? `?${q}` : ''}`,
+    { method: 'GET' },
+  )
+}
+
+/** GET /api/platform/v1/capabilities/agents/{agentId}/changes —— Agent 历史变更记录（管理元数据）。 */
+export function getConsoleAgentChanges(
+  agentId: string,
+  limit = 20,
+): Promise<PlatformAgentChange[]> {
+  return request<PlatformAgentChange[]>(
+    `/platform/v1/capabilities/agents/${encodeURIComponent(agentId)}/changes?limit=${limit}`,
     { method: 'GET' },
   )
 }

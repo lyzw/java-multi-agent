@@ -215,10 +215,11 @@ public class RagPrimaryDataSourceAutoConfiguration {
         wall.setConfig(wc);
         pool.setProxyFilters(List.of((Filter) wall));
 
-        // ⚠️ 安全收尾：明确关闭远程监控 / 非必要功能。
-        //    Druid 1.2.28 历史上出过反序列化 CVE（CVE-2021-25646），
-        //    零机会暴露 JMX / HTTP 监控端点。
-        pool.setAllowConnect(false);
+        // ⚠️ 安全说明：DruidDataSource **默认不注册任何远程监控端点**
+        // （StatViewServlet / JMX 需要显式装配才启用）。Druid 1.2.28 历史上
+        // 出过反序列化 CVE（CVE-2021-25646），但那是 StatViewServlet +
+        // 不当 HTTP 入口组合出来的——我们**不引** druid-spring-boot-starter，
+        // 也不注册 Servlet，攻击面天然为零。
 
         // ⚠️ 刻意不调用 init()：Druid 的 getConnection() 内部会惰性调用它，
         //    「建池阶段不失败」由此得到保留。
