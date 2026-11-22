@@ -4,6 +4,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
@@ -101,6 +103,10 @@ public class ConfigPublishWorkflowService {
      */
     public static final Set<String> TENANT_LIFECYCLE_OBJECT_TYPES =
             Set.of(TENANT_OBJECT_TYPE, "result_contract", "routing_policy");
+
+    /** 变更前快照的序列化器（与 payload 同款 JSON 形状）。 */
+    private static final tools.jackson.databind.ObjectMapper SNAPSHOT_MAPPER =
+            new tools.jackson.databind.ObjectMapper();
 
     private final ConfigPublishRequestPort requests;
     private final ConfigPublishService publisher;
@@ -500,7 +506,62 @@ public class ConfigPublishWorkflowService {
         if (reason == null || reason.isBlank()) {
             throw new IllegalArgumentException("变更理由不能为空");
         }
-        return requests.insert(tenantId, payload.operation(), payload.toJson(), reason, requesterId);
+        // ⚠️ 变更前快照必须在**提交这一刻**由服务端计算并落库：
+        //    事后反查 cap_agent_def 会因目标版本被清理 / 再次变更而失真，
+        //    客户端提交的「变更前」也没有证据价值（调用方自己写的）。
+        String beforePayload = snapshotBefore(tenantId, payload);
+        return requests.insertWithBeforeSnapshot(
+                tenantId, payload.operation(), payload.toJson(), beforePayload, reason, requesterId);
+    }
+
+    /**
+     * 计算本次变更的<b>变更前</b>配置快照（租户作用域）。
+     *
+     * <p>按 {@code payload} 里出现的 Agent 取当前权威定义（{@code cap_agent_def} 的最新版本），
+     * 组装成与 payload 同构的 JSON 供变更记录做前后对比。
+     *
+     * <p>⚠️ 取不到基线就返回 {@code null}（新建对象 / 非发布类操作 / 读取异常），
+     * 不臆造空对象 —— 前端据此区分「无基线」与「基线是空配置」。
+     *
+     * <p>⚠️ 快照读取异常<b>不得让申请失败</b>：它是辅助证据，缺了只是对比少一侧；
+     * 但必须记日志留痕。
+     */
+    private @Nullable String snapshotBefore(@NonNull String tenantId,
+                                           @NonNull ConfigPublishPayload payload) {
+        if (payload.agents().isEmpty()) {
+            return null;
+        }
+        try {
+            List<Map<String, Object>> agents = new ArrayList<>();
+            for (ConfigPublishPayload.AgentSpec spec : payload.agents()) {
+                agentDefs.findLatest(tenantId, spec.agentId()).ifPresent(def -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("agentId", def.agentId());
+                    m.put("version", def.version());
+                    m.put("name", def.name());
+                    m.put("description", def.description());
+                    m.put("roles", def.roles());
+                    m.put("enabledSkills", def.enabledSkills());
+                    m.put("skillBundles", def.skillBundles());
+                    m.put("capabilityTags", def.capabilityTags());
+                    m.put("overrides", def.overrides());
+                    m.put("orchestration", def.orchestration());
+                    m.put("instructions", def.instructions());
+                    m.put("modelRef", def.modelRef());
+                    m.put("generationParams", def.generationParams());
+                    agents.add(m);
+                });
+            }
+            if (agents.isEmpty()) {
+                return null;
+            }
+            Map<String, Object> snapshot = new LinkedHashMap<>();
+            snapshot.put("agents", agents);
+            return SNAPSHOT_MAPPER.writeValueAsString(snapshot);
+        } catch (RuntimeException e) {
+            log.warn("计算变更前配置快照失败（不影响本次申请）：operation={}", payload.operation(), e);
+            return null;
+        }
     }
 
     /**

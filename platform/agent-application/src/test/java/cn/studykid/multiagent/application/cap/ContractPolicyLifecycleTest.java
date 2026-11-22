@@ -81,6 +81,33 @@ class ContractPolicyLifecycleTest {
         requestSeq = 0L;
     }
 
+    // ── 用例：租户通道的「变更前」快照 ─────────────────────────────
+
+    @Test
+    @DisplayName("✅ 租户通道提交发布申请时，把「变更前」配置快照一并落库")
+    void tenantChannelCapturesBeforeSnapshot() {
+        // 已存在 Agent 定义 → 它应成为本次变更的「变更前」
+        fixture.agentDefs().insert(new CapAgentDef("tenant-x", "agent-snap", 2, "旧名字", "旧描述",
+                List.of("TEACHER"), List.of(), List.of(), List.of(),
+                "{}", "{}", "{}", "old-model", "{}",
+                "fp-old", 1, Instant.EPOCH, Instant.EPOCH));
+
+        ConfigPublishWorkflowService workflow = workflow();
+        var spec = new ConfigPublishPayload.AgentSpec("agent-snap", "新名字", "新描述",
+                List.of("TEACHER"), List.of(), List.of(), List.of(),
+                "{}", "{}", "{}", "new-model", "{}");
+        workflow.requestPublish(TENANT, ConfigRelease.Scope.TENANT, List.of(spec), null,
+                "调整模型", REQUESTER);
+
+        String before = requestPortInstance.lastBeforePayload;
+        assertThat(before)
+                .as("租户通道也必须记录变更前快照，否则变更记录对比缺一半")
+                .isNotNull();
+        assertThat(before).contains("agent-snap");
+        assertThat(before).contains("旧名字");
+        assertThat(before).contains("old-model");
+    }
+
     // ── 用例：独立生命周期迁移端点 ──────────────────────────────────
 
     @Test
@@ -482,9 +509,26 @@ class ContractPolicyLifecycleTest {
         };
     }
 
-    /** 内存申请单端口（三步状态机与 DB 实现同口径）。 */
+    /** 内存申请单端口（三步状态机与 DB 实现同口径）；复用一个实例以读取写入的快照。 */
+    private final RequestPort requestPortInstance = new RequestPort();
+
     private ConfigPublishRequestPort requestPort() {
-        return new ConfigPublishRequestPort() {
+        return requestPortInstance;
+    }
+
+    private final class RequestPort implements ConfigPublishRequestPort {
+            /** 最近一次写入的「变更前」快照（null = 无基线）。 */
+            String lastBeforePayload = "<unset>";
+
+            @Override
+            public ConfigPublishRequest insertWithBeforeSnapshot(String tenantId,
+                                                                 ConfigPublishRequest.Operation operation,
+                                                                 String payload, String beforePayload,
+                                                                 String reason, String requesterId) {
+                lastBeforePayload = beforePayload;
+                return insert(tenantId, operation, payload, reason, requesterId);
+            }
+
             @Override
             public ConfigPublishRequest insert(String tenantId,
                                                ConfigPublishRequest.Operation operation,
@@ -568,6 +612,5 @@ class ContractPolicyLifecycleTest {
                 requests.put(requestId, next);
                 return next;
             }
-        };
     }
 }
