@@ -16,7 +16,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Alert, Descriptions, Divider, Drawer, Modal, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Button, Descriptions, Divider, Drawer, Modal, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
 import {
   getConsoleAgentChanges,
@@ -618,8 +618,27 @@ function AgentChangeHistory({
         render: (v: string) => <Tooltip title={v}><Typography.Text>运营人员</Typography.Text></Tooltip>,
       },
       { title: '时间', dataIndex: 'requestedAt', width: 160, render: (v: string) => timeCell(v) },
+      {
+        title: '对比',
+        width: 110,
+        fixed: 'right' as const,
+        render: (_: unknown, row: PlatformAgentChange) =>
+          row.targetVersion != null && onOpenVersionDiff ? (
+            <Tooltip title={`查看 v${row.targetVersion} 与上一版本的配置差异`}>
+              <Button
+                size="small"
+                type="link"
+                onClick={() => onOpenVersionDiff(row.targetVersion as number)}
+              >
+                配置对比
+              </Button>
+            </Tooltip>
+          ) : (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>—</Typography.Text>
+          ),
+      },
     ],
-    [tenantNameOf],
+    [tenantNameOf, onOpenVersionDiff],
   )
 
   return (
@@ -651,6 +670,7 @@ function AgentChangeHistory({
       )}
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         仅展示定义发布 / 生命周期 / 租户分配等管理动作元数据；定义正文、运行输出与会话内容不出平台边界。
+        带「目标版本」的记录可<b>双击</b>或点「配置对比」查看该版本与上一版本的配置差异（正文取自权威定义版本快照）。
       </Typography.Text>
     </>
   )

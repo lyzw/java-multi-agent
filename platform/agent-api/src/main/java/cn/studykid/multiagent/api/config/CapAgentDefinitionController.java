@@ -1,5 +1,6 @@
 package cn.studykid.multiagent.api.config;
 
+import java.time.Instant;
 import java.util.List;
 
 import org.jspecify.annotations.NonNull;
@@ -86,6 +87,45 @@ public class CapAgentDefinitionController {
     }
 
     /**
+     * 读取某个 Agent 的<b>全部历史版本</b>（{@code cap_agent_def} 不可变版本行，版本号降序）。
+     *
+     * <p>⚠️ <b>为什么需要它</b>：变更记录（{@code /platform/v1/capabilities/agents/{id}/changes}）
+     * 只回管理元数据、<b>不含定义正文</b>（平台边界纪律）。而「某条变更前后的配置差异」
+     * 必须拿到两侧的完整配置才说得清 —— 正文只能从版本快照里取。
+     * 本端点按版本返回<b>完整结构化定义</b>，供变更对比（Diff）使用。
+     *
+     * <p>⚠️ <b>来源是权威表 {@code cap_agent_def}，不是 {@code agent_version}</b>：
+     * 后者只是历史快照归档，运行期语义（提示词 / 模型 / 生成参数 / 编排）以本表为准；
+     * 拿旧快照做 diff 会对比出「看起来变了、其实运行期没变」的假差异。
+     *
+     * <p>⚠️ <b>平台边界</b>：本端点走 {@code AGENT_MANAGE} 鉴权（与
+     * {@code /agents/{id}/definition} 同口径）；Agent 可尚无租户绑定，
+     * 故用 {@link cn.studykid.multiagent.ports.persistence.CapAgentDefPort#listVersionsGlobal}
+     * 的全局口径读取（按绑定过滤会读不到未绑定租户的 Agent）。
+     *
+     * @param agentId Agent 标识
+     * @return 全部版本行，按版本号降序；无任何版本时 404（与单对象读取一致）
+     */
+    @GetMapping("/{agentId}/versions")
+    public ResponseEntity<List<AgentDefinitionResponse>> listDefinitions(
+            @PathVariable String agentId) {
+        TenantContext context = currentPrincipal.context();
+        authorization.requireAuthorized(context,
+                AuthorizationService.Actions.AGENT_MANAGE, null);
+        if (GovernanceSupport.rateLimited(rateLimiter, context,
+                RateLimitPort.Buckets.GOVERNANCE_QUERY)) {
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.TOO_MANY_REQUESTS, "请求过于频繁");
+        }
+        var versions = agentDefs.listVersionsGlobal(agentId);
+        if (versions.isEmpty()) {
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在");
+        }
+        return ResponseEntity.ok(versions.stream().map(AgentDefinitionResponse::of).toList());
+    }
+
+    /**
      * 多级 Agent 的结构化定义视图。
      *
      * @param agentId        Agent 标识
@@ -102,6 +142,8 @@ public class CapAgentDefinitionController {
      * @param modelRef       绑定的模型引用（{@code null} = 未绑定，运行期 fail-closed）
      * @param generationParams 生成参数（<b>JSON 原文</b>，缺省 {@code "{}"} = 运行期默认值）
      * @param published      该版本行是否已发布
+     * @param createdAt      版本行创建时间（= 该次配置保存的变更时间，供版本时间线展示）
+     * @param publishedAt    发布时间（{@code null} = 草稿）
      */
     public record AgentDefinitionResponse(
             @NonNull String agentId,
@@ -117,7 +159,11 @@ public class CapAgentDefinitionController {
             @NonNull String instructions,
             @Nullable String modelRef,
             @NonNull String generationParams,
-            boolean published
+            boolean published,
+            /** 版本行创建时间（版本变更时间）；老数据可能为空，故可空。 */
+            @Nullable Instant createdAt,
+            /** 发布时间；未发布为 null。 */
+            @Nullable Instant publishedAt
     ) {
         static AgentDefinitionResponse of(CapAgentDef def) {
             // ⚠️ 提示词 / 模型 / 生成参数必须回显：编辑既有 Agent 时前端靠这个 DTO
@@ -127,7 +173,7 @@ public class CapAgentDefinitionController {
                     def.roles(), def.enabledSkills(), def.skillBundles(), def.capabilityTags(),
                     def.overrides(), def.orchestration(),
                     def.instructions(), def.modelRef(), def.generationParams(),
-                    def.isPublished());
+                    def.isPublished(), def.createdAt(), def.publishedAt());
         }
     }
 }

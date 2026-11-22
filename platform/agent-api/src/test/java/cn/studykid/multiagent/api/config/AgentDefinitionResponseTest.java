@@ -43,6 +43,38 @@ class AgentDefinitionResponseTest {
     }
 
     @Test
+    @DisplayName("✅ 历史版本回显版本变更时间与发布时间（配置对比需要两侧时间线）")
+    void responseCarriesVersionTimestamps() {
+        Instant created = Instant.parse("2026-11-18T09:30:00Z");
+        Instant published = Instant.parse("2026-11-19T10:00:00Z");
+        CapAgentDef def = new CapAgentDef("tenant-a", "agent-a", 2, "Agent", "d",
+                List.of(), List.of(), List.of(), List.of(),
+                "{}", "{}", "{}", null, "{}",
+                "fp2", 1, created, published);
+
+        var response = CapAgentDefinitionController.AgentDefinitionResponse.of(def);
+
+        assertThat(response.createdAt()).isEqualTo(created);
+        assertThat(response.publishedAt()).isEqualTo(published);
+    }
+
+    @Test
+    @DisplayName("✅ 草稿版本的发布时间为空（不得与版本变更时间混用）")
+    void draftHasNoPublishedAt() {
+        Instant created = Instant.parse("2026-11-20T08:00:00Z");
+        CapAgentDef def = new CapAgentDef("tenant-a", "agent-a", 4, "Draft", null,
+                List.of(), List.of(), List.of(), List.of(),
+                "{}", "{}", "{}", null, "{}",
+                "fp4", 1, created, null);
+
+        var response = CapAgentDefinitionController.AgentDefinitionResponse.of(def);
+
+        assertThat(response.createdAt()).isEqualTo(created);
+        assertThat(response.publishedAt()).isNull();
+        assertThat(response.published()).isFalse();
+    }
+
+    @Test
     @DisplayName("✅ 未绑定模型 / 未声明提示词的旧行如实回显（不得臆造默认值）")
     void unboundModelIsNotInvented() {
         CapAgentDef def = new CapAgentDef("tenant-a", "agent-a", 1, "旧 Agent", null,

@@ -742,6 +742,10 @@ export interface AgentDefinition {
    */
   generationParams?: string
   published: boolean
+  /** 版本行创建时间（= 该次配置保存的变更时间）—— 历史版本列表展示用。 */
+  createdAt?: string | null
+  /** 发布时间；草稿为 null。 */
+  publishedAt?: string | null
 }
 
 /* ── C34-3：委派拓扑（cap_agent_child_ref 投影） ── */

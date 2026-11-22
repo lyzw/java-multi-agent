@@ -4,11 +4,11 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { App as AntApp } from 'antd'
 import { DetailModeProvider } from '@/contexts/detailMode'
 
-const getAgentVersions = vi.fn()
+const getPlatformAgentDefinitionVersions = vi.fn()
 const cleanupAgentVersions = vi.fn()
 
 vi.mock('@/api/adminApi', () => ({
-  getAgentVersions: (...args: unknown[]) => getAgentVersions(...args),
+  getPlatformAgentDefinitionVersions: (...args: unknown[]) => getPlatformAgentDefinitionVersions(...args),
   cleanupAgentVersions: (...args: unknown[]) => cleanupAgentVersions(...args),
 }))
 
@@ -16,13 +16,25 @@ import { AgentVersionHistory } from '@/pages/agents/AgentVersionHistory'
 
 const AGENT = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 
-function version(versionNumber: number, published: boolean, definition = '{}') {
+function def(version: number, published: boolean, patch: Record<string, unknown> = {}) {
   return {
-    versionId: `v-${versionNumber}`,
-    versionNumber,
-    definition,
-    publishedAt: published ? '2026-11-20T10:00:00Z' : null,
-    createdAt: `2026-11-1${versionNumber}T10:00:00Z`,
+    agentId: AGENT,
+    version,
+    name: 'Agent',
+    description: null,
+    roles: [],
+    enabledSkills: [],
+    skillBundles: [],
+    capabilityTags: [],
+    overrides: '{}',
+    orchestration: '{}',
+    instructions: '{}',
+    modelRef: 'gpt-4o',
+    generationParams: '{}',
+    published,
+    createdAt: `2026-11-0${version}T10:00:00Z`,
+    publishedAt: published ? `2026-11-0${version}T12:00:00Z` : null,
+    ...patch,
   }
 }
 
@@ -36,85 +48,84 @@ function renderHistory() {
   )
 }
 
-describe('Agent 版本历史：展示 / 清理 / 双击 Diff', () => {
+describe('Agent 变更历史：展示 / 清理 / 双击配置对比', () => {
   beforeEach(() => {
-    getAgentVersions.mockReset()
+    getPlatformAgentDefinitionVersions.mockReset()
     cleanupAgentVersions.mockReset()
     window.localStorage.clear()
   })
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
+  afterEach(() => vi.restoreAllMocks())
 
   it('展示版本列表：区分已发布与草稿，并统计未发布草稿数', async () => {
-    getAgentVersions.mockResolvedValue([
-      version(3, false),
-      version(2, true),
-      version(1, true),
+    getPlatformAgentDefinitionVersions.mockResolvedValue([
+      def(3, false), def(2, true), def(1, true),
     ])
     renderHistory()
-
     await waitFor(() => expect(screen.getByText(/变更历史（3 条）/)).toBeTruthy())
     expect(screen.getByText('1 条未发布草稿')).toBeTruthy()
     expect(screen.getByText('草稿（未发布）')).toBeTruthy()
     expect(screen.getAllByText('已发布').length).toBe(2)
   })
 
-  it('清理草稿：调用 DELETE 端点并刷新列表（列表状态随之更新）', async () => {
-    getAgentVersions.mockResolvedValueOnce([
-      version(3, false),
-      version(2, true),
-    ])
+  it('清理草稿：调用 DELETE 后重新拉取，列表状态随之更新', async () => {
+    getPlatformAgentDefinitionVersions.mockResolvedValueOnce([def(3, false), def(2, true)])
     cleanupAgentVersions.mockResolvedValue({ agentId: AGENT, removed: 1 })
-    // 清理后重取 → 只剩已发布版本
-    getAgentVersions.mockResolvedValueOnce([version(2, true)])
+    getPlatformAgentDefinitionVersions.mockResolvedValueOnce([def(2, true)])
 
     renderHistory()
     await waitFor(() => expect(screen.getByText('1 条未发布草稿')).toBeTruthy())
 
-    // 点击「清理草稿」→ 确认框 → 确认
     screen.getByRole('button', { name: /清理草稿/ }).click()
     await waitFor(() => expect(screen.getByText('确认清理')).toBeTruthy())
     screen.getByText('确认清理').click()
 
     await waitFor(() => expect(cleanupAgentVersions).toHaveBeenCalledWith(AGENT))
-    // 刷新后未发布草稿归零，列表变回 1 条
     await waitFor(() => expect(screen.getByText(/变更历史（1 条）/)).toBeTruthy())
     expect(screen.queryByText('1 条未发布草稿')).toBeNull()
   })
 
-  it('双击某条记录打开变更对比视图，并展示前后差异', async () => {
-    getAgentVersions.mockResolvedValue([
-      version(2, false, JSON.stringify({ name: 'B', model: 'gpt-4o', roles: ['x'] })),
-      version(1, true, JSON.stringify({ name: 'A', model: 'gpt-4o' })),
+  it('双击某条记录 → 打开该版本与上一版本的配置对比（含变更路径与前后值）', async () => {
+    getPlatformAgentDefinitionVersions.mockResolvedValue([
+      def(2, false, { modelRef: 'gpt-4o-mini', enabledSkills: ['skill-a'] }),
+      def(1, true, { modelRef: 'gpt-4o' }),
     ])
     renderHistory()
     await waitFor(() => expect(screen.getByText(/变更历史（2 条）/)).toBeTruthy())
 
-    // 双击第一行（v2）
-    const rows = document.querySelectorAll('tbody tr')
-    expect(rows.length).toBeGreaterThanOrEqual(2)
+    const rows = document.querySelectorAll('tbody tr.ant-table-row')
+    expect(rows.length).toBe(2)
     rows[0]?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
 
-    // Diff 弹窗打开，标题显示 v1 → v2
-    await waitFor(() => expect(screen.getByText(/v1 → v2/)).toBeTruthy())
-    // 有变更的 key 被标出：name 被改（值 A → B）、roles 为新增
-    const dialog = document.querySelector('.ant-modal-content') as HTMLElement
-    expect(dialog).toBeTruthy()
-    const text = dialog.textContent ?? ''
-    expect(text).toContain('name')
-    expect(text).toContain('roles')
-    // 前后值都出现在对比视图里
-    expect(text).toContain('A')
-    expect(text).toContain('B')
+    // 标题：v1 → v2 配置对比
+    await waitFor(() => expect(screen.getByText(/v1 → v2 配置对比/)).toBeTruthy())
+    const modal = document.querySelector('.ant-modal-content') as HTMLElement
+    expect(modal).toBeTruthy()
+    const text = modal.textContent ?? ''
+    // 变更路径精确定位到字段，而非泛泛的「某个 key 变了」
+    expect(text).toContain('modelRef')
+    expect(text).toContain('gpt-4o')
+    expect(text).toContain('enabledSkills[0]')
+    expect(text).toContain('skill-a')
+    // 统计标签
+    expect(text).toContain('+1')
+    expect(text).toContain('~1')
   })
 
-  it('只有一个版本时双击提示无法对比', async () => {
-    getAgentVersions.mockResolvedValue([version(1, true)])
+  it('首个版本双击提示没有更早版本可对比', async () => {
+    getPlatformAgentDefinitionVersions.mockResolvedValue([def(1, true)])
     renderHistory()
     await waitFor(() => expect(screen.getByText(/变更历史（1 条）/)).toBeTruthy())
-    const rows = document.querySelectorAll('tbody tr')
+    const rows = document.querySelectorAll('tbody tr.ant-table-row')
     rows[0]?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
-    await waitFor(() => expect(screen.getByText(/只有一个版本/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/首个版本/)).toBeTruthy())
+  })
+
+  it('两版配置完全一致时提示「完全一致」而不是空面板', async () => {
+    getPlatformAgentDefinitionVersions.mockResolvedValue([def(2, false), def(1, true)])
+    renderHistory()
+    await waitFor(() => expect(screen.getByText(/变更历史（2 条）/)).toBeTruthy())
+    const rows = document.querySelectorAll('tbody tr.ant-table-row')
+    rows[0]?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    await waitFor(() => expect(screen.getByText(/两版配置完全一致/)).toBeTruthy())
   })
 })

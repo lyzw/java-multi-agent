@@ -669,6 +669,16 @@ export function applyPlatformAgentPublishRequest(
   )
 }
 
+/** GET /api/cap/agents/{agentId}/versions —— 权威定义的全部历史版本（版本降序，含完整配置）。 */
+export function getPlatformAgentDefinitionVersions(
+  agentId: string,
+): Promise<AgentDefinition[]> {
+  return request<AgentDefinition[]>(
+    `/cap/agents/${encodeURIComponent(agentId)}/versions`,
+    { method: 'GET' },
+  )
+}
+
 /** GET /agent-config/agents/{agentId}/definition?tenantId= —— 权威定义（编辑回填）。 */
 export function getPlatformAgentDefinition(
   tenantId: string,
