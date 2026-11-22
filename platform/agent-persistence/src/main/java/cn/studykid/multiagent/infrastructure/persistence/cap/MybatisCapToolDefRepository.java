@@ -111,6 +111,13 @@ public class MybatisCapToolDefRepository implements CapToolDefPort {
     }
 
     @Override
+    public @NonNull Optional<CapToolDef> findLatest(@NonNull String toolId) {
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn -> mapper.findLatest(toolId)
+                        .map(MybatisCapToolDefRepository::toRecord)));
+    }
+
+    @Override
     public @NonNull Optional<CapToolDef> findByMcpBinding(@NonNull String mcpServerId,
                                                            @NonNull String mcpToolName) {
         return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
@@ -138,6 +145,15 @@ public class MybatisCapToolDefRepository implements CapToolDefPort {
     }
 
     // ── DO → record（逐字段，与旧 JDBC 的 map() 对齐）──
+
+    @Override
+    public @NonNull List<CapToolDef> listVersions(@NonNull String toolId) {
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn ->
+                        mapper.listVersions(toolId).stream()
+                                .map(MybatisCapToolDefRepository::toRecord)
+                                .toList()));
+    }
 
     private static CapToolDef toRecord(CapToolDefDO d) {
         return new CapToolDef(

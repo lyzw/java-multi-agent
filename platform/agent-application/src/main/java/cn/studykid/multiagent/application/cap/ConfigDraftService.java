@@ -102,7 +102,18 @@ public class ConfigDraftService {
         return created;
     }
 
-    /** 保存草稿（多次编辑递增 draft_version）。 */
+    /**
+     * 保存草稿（版本管理机制 · 2026-11-22）。
+     *
+     * <p>⚠️ <b>有实际修改才递增版本</b>：新内容指纹与当前草稿指纹一致时，
+     * 本次保存按 no-op 处理 —— 不递增 {@code draft_version}、不更新内容与
+     * {@code updated_at}（版本变更时间），也不写审计 —— 空转保存会污染版本历史。
+     * <p>⚠️ <b>编辑仅允许在未发布草稿上进行</b>：已提交审批 / 待发布 / 已终态的草稿
+     * 一律拒绝编辑（持久层 WHERE 亦有同款状态闸门兜底）。
+     * <p>⚠️ 有实际修改时，版本变更（{@code draft_version + 1}）与变更时间
+     * （{@code updated_at} + 审计 {@code created_at}）一并落库，
+     * 审计的 {@code from_version → to_version} 记录草稿版本递增轨迹。
+     */
     public @NonNull ConfigDraft save(@NonNull String scope,
                                        @Nullable String tenantId,
                                        @NonNull UUID draftId,
@@ -111,13 +122,36 @@ public class ConfigDraftService {
         Optional<ConfigDraft> existing = drafts.findById(scope, tenantId, draftId);
         if (existing.isEmpty()) throw new IllegalArgumentException("草稿不存在: " + draftId);
         ConfigDraft cur = existing.get();
+        requireEditableDraftState(cur);
+        String newFingerprint = fingerprint(newConfig);
+        if (newFingerprint != null && newFingerprint.equals(cur.configFingerprint())) {
+            // 无实际修改：内容指纹一致 → 版本号不加 1，直接返回当前草稿。
+            log.info("草稿 {} 内容无实际修改（指纹一致），不递增版本、不变更时间", draftId);
+            return cur;
+        }
         ConfigDraft saved = drafts.saveContent(scope, tenantId, draftId, newConfig,
-                fingerprint(newConfig), operatorId);
+                newFingerprint, operatorId);
         audit.logSaveDraft(scope, tenantId, cur.resourceKind(), cur.resourceId(),
                 cur.resourceName(), cur.draftConfig(), newConfig,
-                cur.baseVersion(), cur.baseVersion(),
+                cur.draftVersion(), saved.draftVersion(),
                 operatorId);
         return saved;
+    }
+
+    /**
+     * 编辑状态闸门：只有「未发布」的草稿可编辑（与持久层
+     * {@code draft_state IN ('DRAFT','APPROVAL_REJECTED','PUBLISH_FAILED')} 同口径，
+     * 服务层先拒给出更明确的错误信息）。
+     */
+    private static void requireEditableDraftState(@NonNull ConfigDraft cur) {
+        String state = cur.draftState();
+        boolean editable = DraftState.DRAFT.name().equals(state)
+                || DraftState.APPROVAL_REJECTED.name().equals(state)
+                || DraftState.PUBLISH_FAILED.name().equals(state);
+        if (!editable) {
+            throw new IllegalStateException("草稿当前状态 " + state
+                    + "，编辑仅允许在未发布草稿（DRAFT / APPROVAL_REJECTED / PUBLISH_FAILED）上进行");
+        }
     }
 
     /** 查找资源的当前活跃草稿。 */

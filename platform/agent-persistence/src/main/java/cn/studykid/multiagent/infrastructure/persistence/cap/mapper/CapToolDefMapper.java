@@ -54,6 +54,14 @@ public interface CapToolDefMapper extends BaseMapper<CapToolDefDO> {
     /** SQL_FIND_LATEST_PUBLISHED：已发布版本（published_at 非空）中取最高版本。 */
     Optional<CapToolDefDO> findLatestPublished(@Param("id") String id);
 
+    /**
+     * SQL_FIND_LATEST：该逻辑 id 的<b>绝对最高版本行</b>（不区分发布状态）。
+     *
+     * <p>⚠️ 与 SQL_FIND_LATEST_PUBLISHED 的「已发布口径」不同：本方法供版本管理守卫使用 ——
+     * 服务端据此算「下一个版本号 = 最高版本 + 1」，避免已有未发布草稿却撞号。
+     */
+    Optional<CapToolDefDO> findLatest(@Param("id") String id);
+
     /** SQL_FIND_BY_MCP_BINDING：按 mcp_server_id + mcp_tool_name 反查最新已发布版本。 */
     Optional<CapToolDefDO> findByMcpBinding(@Param("mcpServerId") String mcpServerId,
                                             @Param("mcpToolName") String mcpToolName);
@@ -63,4 +71,7 @@ public interface CapToolDefMapper extends BaseMapper<CapToolDefDO> {
 
     /** SQL_LIST_BY_MCP_SERVER：每个 mcp_tool_name 的最高版本整行（DISTINCT ON (mcp_tool_name)）。 */
     List<CapToolDefDO> listByMcpServer(@Param("mcpServerId") String mcpServerId);
+
+    /** SQL_LIST_VERSIONS：该 id 的全部版本行（不可变历史，按版本倒序 · 能力目录版本回溯用）。 */
+    List<CapToolDefDO> listVersions(@Param("id") String id);
 }

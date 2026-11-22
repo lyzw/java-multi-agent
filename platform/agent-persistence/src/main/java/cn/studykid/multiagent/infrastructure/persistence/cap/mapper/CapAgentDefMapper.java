@@ -70,4 +70,7 @@ public interface CapAgentDefMapper extends BaseMapper<CapAgentDefDO> {
 
     /** SQL_LIST_LATEST_PER_AGENT：每个已绑定 Agent 一行的最高版本，按 agent_id 升序。 */
     List<CapAgentDefDO> listLatestPerAgent(@Param("tenantId") String tenantId);
+
+    /** SQL_LIST_VERSIONS_GLOBAL：该 Agent 的全部版本行，无绑定过滤，按版本倒序（能力目录版本回溯用）。 */
+    List<CapAgentDefDO> listVersionsGlobal(@Param("agentId") String agentId);
 }

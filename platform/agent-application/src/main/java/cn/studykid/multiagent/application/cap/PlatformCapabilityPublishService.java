@@ -67,6 +67,8 @@ import cn.studykid.multiagent.ports.persistence.PlatformOpsSessionPort;
  * <p>⚠️ <b>版本号与内容指纹由服务端决定</b>：
  * 版本号 = 该对象现有最大版本 + 1；内容指纹 = {@link CapObjectFingerprint} 按内容计算。
  * 客户端提交的这两者一律不采信 —— 否则「内容没变」这个证明就是客户端自己说的。
+ * 且<b>内容与现有最新版本完全一致（无实际修改）时拒绝发布、不新增版本</b>：
+ * 版本号只随真实内容变化递增。
  *
  * <p>⚠️ <b>生命周期迁移与发布不同源</b>：
  * 停用（{@code PUBLISHED → DEPRECATED}）走 {@link ConfigLifecycleService}，
@@ -468,6 +470,8 @@ public class PlatformCapabilityPublishService {
      *
      * <p>⚠️ 版本号取「全局最大版本 + 1」（{@code findLatestGlobal}，不按绑定过滤），
      * 内容指纹由服务端按 {@link CapObjectFingerprint} 计算——都不采信客户端。
+     * <p>⚠️ <b>无实际修改不加版本</b>：内容与现有最新版本行完全一致（指纹相同）时
+     * 直接拒绝——版本号只应随真实内容变化递增，空转改版会污染版本历史。
      *
      * @param resolveBaseline {@code true} = 解析 CAS 基线（执行期）；{@code false} = 不解析（申请期）
      */
@@ -476,13 +480,18 @@ public class PlatformCapabilityPublishService {
         Instant now = clock.instant();
         List<CapAgentDef> defs = new ArrayList<>();
         for (ConfigPublishPayload.AgentSpec spec : payload.agents()) {
-            int version = agentDefs.findLatestGlobal(spec.agentId())
-                    .map(CapAgentDef::version).orElse(0) + 1;
-            CapAgentDef draft = new CapAgentDef(spec.agentId(), version, spec.name(),
-                    spec.description(), spec.roles(), spec.enabledSkills(), spec.skillBundles(),
-                    spec.capabilityTags(), spec.overrides(), spec.orchestration(),
-                    spec.instructions(), spec.modelRef(), spec.generationParams(),
-                    "pending", 1, now, null);
+            CapAgentDef latest = agentDefs.findLatestGlobal(spec.agentId()).orElse(null);
+            int version = (latest == null ? 0 : latest.version()) + 1;
+            if (latest != null && CapObjectFingerprint.of(agentDraft(spec, latest.version(), now))
+                    .equals(latest.configFingerprint())) {
+                // ⚠️ 版本号含在指纹里：探针行用「与最新版本相同的版本号」重建内容，
+                //    指纹一致 ⟺ 内容完全一致（时间戳不参与计算）。
+                throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_VERSION_MISMATCH,
+                        "agents", "Agent " + spec.agentId() + " 的内容与现有版本 v"
+                                + latest.version() + " 完全一致（无实际修改），不新增版本；"
+                                + "如需变更请修改内容后重新提交");
+            }
+            CapAgentDef draft = agentDraft(spec, version, now);
             String fingerprint = CapObjectFingerprint.of(draft);
             defs.add(new CapAgentDef(spec.agentId(), version, spec.name(), spec.description(),
                     spec.roles(), spec.enabledSkills(), spec.skillBundles(),
@@ -496,8 +505,24 @@ public class PlatformCapabilityPublishService {
                 List.of(), List.of(), List.of(), defs, null, List.of(), List.of());
     }
 
+    /** Agent 草稿行（指纹占位，占位值不参与指纹计算）。 */
+    private static CapAgentDef agentDraft(ConfigPublishPayload.AgentSpec spec, int version,
+                                          Instant now) {
+        return new CapAgentDef(spec.agentId(), version, spec.name(),
+                spec.description(), spec.roles(), spec.enabledSkills(), spec.skillBundles(),
+                spec.capabilityTags(), spec.overrides(), spec.orchestration(),
+                spec.instructions(), spec.modelRef(), spec.generationParams(),
+                "pending", 1, now, null);
+    }
+
     /**
      * 构造平台级发布命令（版本号与内容指纹在此确定）。
+     *
+     * <p>⚠️ <b>无实际修改不加版本</b>（版本管理机制 · 2026-11-22）：
+     * 每个对象在分配「最大版本 + 1」之前，先用「与现有最新版本<b>相同版本号</b>」的
+     * 探针行重算内容指纹并与库存指纹比对 —— 一致即「内容完全没变」，直接拒绝：
+     * 版本号只应随<b>真实内容变化</b>递增，空转改版会污染版本历史、制造无意义的
+     * 「已发布不可变行」。该守卫在申请预检与执行期都会生效（两处都调本方法）。
      *
      * @param resolveBaseline {@code true} = 解析并校验 CAS 基线（执行期）；
      *                        {@code false} = 不解析（申请期预检）
@@ -508,76 +533,68 @@ public class PlatformCapabilityPublishService {
         // ⚠️ 版本号要按「**现有最大版本** + 1」算，而不是「最新已发布版本 + 1」——
         //    后者会与草稿版本撞号（撞号后插入被 DO NOTHING 吞掉，
         //    而发布却报告成功 —— 那是「假成功」）。
-        Map<String, Integer> toolVersions = maxVersions(toolDefs.listAll());
-        Map<String, Integer> skillVersions = maxVersions(skillDefs.listAll());
-        Map<String, Integer> serverVersions = maxVersions(serverDefs.listAll());
+        Map<String, LatestDef> toolLatest = latestDefs(toolDefs.listAll());
+        Map<String, LatestDef> skillLatest = latestDefs(skillDefs.listAll());
+        Map<String, LatestDef> serverLatest = latestDefs(serverDefs.listAll());
 
         List<CapToolDef> toolRows = new ArrayList<>();
         for (ConfigPublishPayload.ToolSpec spec : payload.tools()) {
-            int version = toolVersions.getOrDefault(spec.toolId(), 0) + 1;
-            CapToolKind kind = parseKind(spec.kind());
-            // ⚠️ HTTP 配置只在 kind=http 时构造；其余 kind 必须传 null ——
-            //    CapToolDef 的紧凑构造器会拒绝「非 HTTP 却带 http 配置」。
-            CapHttpToolConfig http = null;
-            if (kind == CapToolKind.HTTP) {
-                if (spec.httpMethod() == null || spec.httpUrl() == null
-                        || spec.httpTimeoutMs() == null) {
-                    throw new IllegalArgumentException(
-                            "kind=http 的 Tool 必须同时声明 httpMethod、httpUrl 与 httpTimeoutMs");
-                }
-                http = new CapHttpToolConfig(spec.httpMethod(), spec.httpUrl(),
-                        spec.httpTimeoutMs());
+            LatestDef latest = toolLatest.get(spec.toolId());
+            int version = (latest == null ? 0 : latest.version()) + 1;
+            if (latest != null && CapObjectFingerprint.of(toolDraft(spec, latest.version(), now))
+                    .equals(latest.fingerprint())) {
+                // ⚠️ 版本号含在指纹里：探针行用「与最新版本相同的版本号」重建内容，
+                //    指纹一致 ⟺ 内容完全一致（时间戳不参与计算）。
+                throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_VERSION_MISMATCH,
+                        "tools", "Tool " + spec.toolId() + " 的内容与现有版本 v"
+                                + latest.version() + " 完全一致（无实际修改），不新增版本；"
+                                + "如需变更请修改内容后重新提交");
             }
-            // ⚠️ 全参构造：description 是模型可见的工具行为定义，
-            //    且已纳入 CapObjectFingerprint.of(CapToolDef) —— 用兼容构造器
-            //    既会让管理台提交的描述丢失，又会让「改了描述」算不出内容变化。
-            CapToolDef draft = new CapToolDef(spec.toolId(), version, spec.name(),
-                    kind, parseRisk(spec.riskLevel()),
-                    spec.mcpServerId(), spec.mcpToolName(), http,
-                    spec.inputSchema(), spec.paramPolicies(), spec.description(),
-                    // ⚠️ 占位指纹：内容指纹**不包含**自身，故可先占位再算
-                    "pending", 1, now, null);
+            CapToolDef draft = toolDraft(spec, version, now);
             String fingerprint = CapObjectFingerprint.of(draft);
             toolRows.add(new CapToolDef(spec.toolId(), version, spec.name(),
-                    kind, parseRisk(spec.riskLevel()),
-                    spec.mcpServerId(), spec.mcpToolName(), http,
+                    draft.kind(), draft.riskLevel(),
+                    draft.mcpServerId(), draft.mcpToolName(), draft.httpConfig(),
                     spec.inputSchema(), spec.paramPolicies(), spec.description(),
                     fingerprint, 1, now, null));
         }
 
         List<CapSkillDef> skillRows = new ArrayList<>();
         for (ConfigPublishPayload.SkillSpec spec : payload.skills()) {
-            int version = skillVersions.getOrDefault(spec.skillId(), 0) + 1;
-            List<CapSkillDef.McpDeclaration> declarations = new ArrayList<>();
-            for (ConfigPublishPayload.McpDeclarationSpec declaration : spec.declaredMcp()) {
-                declarations.add(new CapSkillDef.McpDeclaration(
-                        declaration.serverId(), declaration.toolAllowlist()));
+            LatestDef latest = skillLatest.get(spec.skillId());
+            int version = (latest == null ? 0 : latest.version()) + 1;
+            if (latest != null && CapObjectFingerprint.of(skillDraft(spec, latest.version(), now))
+                    .equals(latest.fingerprint())) {
+                throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_VERSION_MISMATCH,
+                        "skills", "Skill " + spec.skillId() + " 的内容与现有版本 v"
+                                + latest.version() + " 完全一致（无实际修改），不新增版本；"
+                                + "如需变更请修改内容后重新提交");
             }
-            SkillDescription desc = skillDescription(spec.description());
-            CapSkillDef draft = new CapSkillDef(spec.skillId(), version, spec.name(),
-                    desc, spec.declaredTools(), declarations,
-                    parseRisk(spec.riskCeiling()), spec.paramPolicies(), spec.requiredCaps(),
-                    "pending", 1, now, null);
+            CapSkillDef draft = skillDraft(spec, version, now);
             String fingerprint = CapObjectFingerprint.of(draft);
             skillRows.add(new CapSkillDef(spec.skillId(), version, spec.name(),
-                    desc, spec.declaredTools(), declarations,
-                    parseRisk(spec.riskCeiling()), spec.paramPolicies(), spec.requiredCaps(),
+                    draft.description(), draft.declaredTools(), draft.declaredMcp(),
+                    draft.riskCeiling(), draft.paramPolicies(), draft.requiredCaps(),
                     fingerprint, 1, now, null));
         }
 
         List<CapMcpServerDef> serverRows = new ArrayList<>();
         for (ConfigPublishPayload.McpServerSpec spec : payload.mcpServers()) {
-            int version = serverVersions.getOrDefault(spec.serverId(), 0) + 1;
-            CapMcpServerDef draft = new CapMcpServerDef(spec.serverId(), version,
-                    parseTransport(spec.transport()), spec.endpoint(), spec.command(),
-                    parseAuthKind(spec.authKind()), parseTrustTier(spec.trustTier()),
-                    spec.exposedToolAllowlist(), parseRisk(spec.connectionRisk()),
-                    false, "pending", spec.credentialRef(), 1, now, null);
+            LatestDef latest = serverLatest.get(spec.serverId());
+            int version = (latest == null ? 0 : latest.version()) + 1;
+            if (latest != null && CapObjectFingerprint.of(serverDraft(spec, latest.version(), now))
+                    .equals(latest.fingerprint())) {
+                throw new ConfigPublishRejectedException(ReasonCode.RESOURCE_VERSION_MISMATCH,
+                        "mcpServers", "MCP Server " + spec.serverId() + " 的内容与现有版本 v"
+                                + latest.version() + " 完全一致（无实际修改），不新增版本；"
+                                + "如需变更请修改内容后重新提交");
+            }
+            CapMcpServerDef draft = serverDraft(spec, version, now);
             String fingerprint = CapObjectFingerprint.of(draft);
             serverRows.add(new CapMcpServerDef(spec.serverId(), version,
-                    parseTransport(spec.transport()), spec.endpoint(), spec.command(),
-                    parseAuthKind(spec.authKind()), parseTrustTier(spec.trustTier()),
-                    spec.exposedToolAllowlist(), parseRisk(spec.connectionRisk()),
+                    draft.transport(), draft.endpoint(), draft.command(),
+                    draft.authKind(), draft.trustTier(),
+                    draft.exposedToolAllowlist(), draft.connectionRisk(),
                     false, fingerprint, spec.credentialRef(), 1, now, null));
         }
 
@@ -585,6 +602,59 @@ public class PlatformCapabilityPublishService {
         return new ConfigPublishCommand(ConfigRelease.Scope.PLATFORM, null, baseline,
                 requesterId, approverId, null,
                 toolRows, skillRows, serverRows, List.of(), null, List.of(), List.of());
+    }
+
+    // ── 草稿行构造（指纹占位；占位值不参与指纹计算，探针与正式行共用）──────
+
+    /** Tool 草稿行。HTTP 配置只在 kind=http 时构造；其余 kind 必须传 null。 */
+    private static CapToolDef toolDraft(ConfigPublishPayload.ToolSpec spec, int version,
+                                        Instant now) {
+        CapToolKind kind = parseKind(spec.kind());
+        // ⚠️ HTTP 配置只在 kind=http 时构造；其余 kind 必须传 null ——
+        //    CapToolDef 的紧凑构造器会拒绝「非 HTTP 却带 http 配置」。
+        CapHttpToolConfig http = null;
+        if (kind == CapToolKind.HTTP) {
+            if (spec.httpMethod() == null || spec.httpUrl() == null
+                    || spec.httpTimeoutMs() == null) {
+                throw new IllegalArgumentException(
+                        "kind=http 的 Tool 必须同时声明 httpMethod、httpUrl 与 httpTimeoutMs");
+            }
+            http = new CapHttpToolConfig(spec.httpMethod(), spec.httpUrl(),
+                    spec.httpTimeoutMs());
+        }
+        // ⚠️ 全参构造：description 是模型可见的工具行为定义，
+        //    且已纳入 CapObjectFingerprint.of(CapToolDef) —— 用兼容构造器
+        //    既会让管理台提交的描述丢失，又会让「改了描述」算不出内容变化。
+        return new CapToolDef(spec.toolId(), version, spec.name(),
+                kind, parseRisk(spec.riskLevel()),
+                spec.mcpServerId(), spec.mcpToolName(), http,
+                spec.inputSchema(), spec.paramPolicies(), spec.description(),
+                "pending", 1, now, null);
+    }
+
+    /** Skill 草稿行。 */
+    private static CapSkillDef skillDraft(ConfigPublishPayload.SkillSpec spec, int version,
+                                          Instant now) {
+        List<CapSkillDef.McpDeclaration> declarations = new ArrayList<>();
+        for (ConfigPublishPayload.McpDeclarationSpec declaration : spec.declaredMcp()) {
+            declarations.add(new CapSkillDef.McpDeclaration(
+                    declaration.serverId(), declaration.toolAllowlist()));
+        }
+        SkillDescription desc = skillDescription(spec.description());
+        return new CapSkillDef(spec.skillId(), version, spec.name(),
+                desc, spec.declaredTools(), declarations,
+                parseRisk(spec.riskCeiling()), spec.paramPolicies(), spec.requiredCaps(),
+                "pending", 1, now, null);
+    }
+
+    /** MCP Server 草稿行。 */
+    private static CapMcpServerDef serverDraft(ConfigPublishPayload.McpServerSpec spec, int version,
+                                               Instant now) {
+        return new CapMcpServerDef(spec.serverId(), version,
+                parseTransport(spec.transport()), spec.endpoint(), spec.command(),
+                parseAuthKind(spec.authKind()), parseTrustTier(spec.trustTier()),
+                spec.exposedToolAllowlist(), parseRisk(spec.connectionRisk()),
+                false, "pending", spec.credentialRef(), 1, now, null);
     }
 
     /**
@@ -628,25 +698,40 @@ public class PlatformCapabilityPublishService {
         }
     }
 
-    /** 取每个逻辑 id 的最大版本号。 */
-    private static Map<String, Integer> maxVersions(List<? extends Object> defs) {
-        Map<String, Integer> out = new LinkedHashMap<>();
+    /** 每个逻辑 id 的最新版本行摘要（版本号 + 内容指纹），供「无实际修改不加版本」守卫使用。 */
+    private record LatestDef(int version, @NonNull String fingerprint) {
+    }
+
+    /**
+     * 取每个逻辑 id 的最新版本行（最高版本号）——
+     * {@code listAll()} 的口径即「每个逻辑 id 取其最高版本行」，其指纹与版本号配套。
+     */
+    private static Map<String, LatestDef> latestDefs(List<? extends Object> defs) {
+        Map<String, LatestDef> out = new LinkedHashMap<>();
         for (Object def : defs) {
             String id;
             int version;
+            String fingerprint;
             if (def instanceof CapToolDef tool) {
                 id = tool.id();
                 version = tool.version();
+                fingerprint = tool.configFingerprint();
             } else if (def instanceof CapSkillDef skill) {
                 id = skill.id();
                 version = skill.version();
+                fingerprint = skill.configFingerprint();
             } else if (def instanceof CapMcpServerDef server) {
                 id = server.id();
                 version = server.version();
+                fingerprint = server.configFingerprint();
             } else {
                 continue;
             }
-            out.merge(id, version, Math::max);
+            LatestDef current = out.get(id);
+            // ⚠️ 指纹必须与「最高版本号」的行配套：若同 id 出现多行，只留版本号最大的。
+            if (current == null || version > current.version()) {
+                out.put(id, new LatestDef(version, fingerprint));
+            }
         }
         return out;
     }

@@ -53,6 +53,21 @@ public interface CapMcpServerDefPort {
     @NonNull Optional<CapMcpServerDef> findLatestPublished(@NonNull String serverId);
 
     /**
+     * 读取该 MCP Server 的<b>最高版本行</b>（<b>不区分发布状态</b> · 版本管理守卫）。
+     *
+     * <p>⚠️ 与 {@link #findLatestPublished} 的「已发布口径」不同：本方法取该逻辑 id 的
+     * <b>绝对最高版本</b>—— 可能是已发布版本、也可能是尚未发布的草稿版本。
+     * 服务端据此算「下一个版本号 = 最高版本 + 1」，避免「已有未发布草稿却撞号」的假成功。
+     *
+     * <p>⚠️ 管理台的「编辑」入口<b>以本方法为准</b>：拿最高版本作为编辑基线 ——
+     * 已发布版本不可覆盖（DB 触发器封禁 UPDATE），编辑在最高版本之上自动产出新版本行。
+     *
+     * @param serverId MCP Server 逻辑 id
+     * @return 最高版本行；无任何版本时为 {@link Optional#empty()}
+     */
+    @NonNull Optional<CapMcpServerDef> findLatest(@NonNull String serverId);
+
+    /**
      * 列出全部 MCP Server 定义（各逻辑 id 的<b>最高</b>版本行）。
      *
      * <p>⚠️ <b>只读用途</b>：供配置台的 MCP 目录页展示「平台上有哪些 MCP Server、
@@ -69,4 +84,16 @@ public interface CapMcpServerDefPort {
      * @return 全部 MCP Server 定义（每个逻辑 id 取其最高版本行），按 id 升序
      */
     @NonNull List<CapMcpServerDef> listAll();
+
+    /**
+     * 列出该 MCP Server 的<b>全部版本行</b>（不可变历史，按版本倒序）。
+     *
+     * <p>⚠️ 与 {@link #listAll()} 的「每 id 最高版本」口径不同：本方法是<b>版本维度</b>
+     * 的全量回溯（能力目录版本管理 · 历史版本留存），供管理台展示版本历史与变更轨迹。
+     * <b>不</b>用于授权判定中的版本解析（那必须走 {@link PublishedVersionPort}）。
+     *
+     * @param serverId MCP Server 逻辑 id
+     * @return 全部版本行，按 version 倒序；无任何版本时为空列表
+     */
+    @NonNull List<CapMcpServerDef> listVersions(@NonNull String serverId);
 }

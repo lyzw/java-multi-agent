@@ -128,6 +128,13 @@ public class MybatisCapSkillDefRepository implements CapSkillDefPort {
     }
 
     @Override
+    public @NonNull Optional<CapSkillDef> findLatest(@NonNull String skillId) {
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn -> mapper.findLatest(skillId)
+                        .map(MybatisCapSkillDefRepository::toRecord)));
+    }
+
+    @Override
     public @NonNull List<CapSkillDef> listAll() {
         return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
                 dataSource, platformContext(), conn ->
@@ -137,6 +144,15 @@ public class MybatisCapSkillDefRepository implements CapSkillDefPort {
     }
 
     // ── DO → record（逐字段，与旧 JDBC 的 map() 对齐）──
+
+    @Override
+    public @NonNull List<CapSkillDef> listVersions(@NonNull String skillId) {
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn ->
+                        mapper.listVersions(skillId).stream()
+                                .map(MybatisCapSkillDefRepository::toRecord)
+                                .toList()));
+    }
 
     private static CapSkillDef toRecord(CapSkillDefDO d) {
         return new CapSkillDef(

@@ -89,4 +89,17 @@ public interface CapAgentDefPort {
      * @return 每 Agent 一行的最高版本定义（按 agent_id 升序）；无 Agent 时为空列表
      */
     @NonNull List<CapAgentDef> listLatestPerAgent(@NonNull String tenantId);
+
+    /**
+     * 列出该 Agent 的<b>全部版本行</b>（不可变历史，按版本倒序，<b>不按租户绑定过滤</b>）。
+     *
+     * <p>⚠️ 与 {@link #findLatestGlobal(String)} 同口径的「全局」读取 —— 供平台控制台
+     * 做版本回溯（能力目录版本管理 · 历史版本留存）；全局 Agent 可以尚无任何
+     * {@code tenant_agent_binding}，按绑定过滤会读不到。
+     * <b>不</b>用于授权判定中的版本解析（那必须走 {@link PublishedVersionPort}）。
+     *
+     * @param agentId Agent 逻辑 id（UUID）
+     * @return 全部版本行，按 version 倒序；无任何版本时为空列表
+     */
+    @NonNull List<CapAgentDef> listVersionsGlobal(@NonNull String agentId);
 }

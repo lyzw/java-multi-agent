@@ -69,6 +69,16 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
             + " FROM cap_tool_def WHERE id = ? AND published_at IS NOT NULL"
             + " ORDER BY version DESC LIMIT 1";
 
+    /**
+     * 该逻辑 id 的绝对最高版本行（不区分发布状态 · 能力目录版本管理）。
+     *
+     * <p>⚠️ 与 {@link #SQL_FIND_LATEST_PUBLISHED} 的「已发布口径」不同：本查询不过滤
+     * {@code published_at}，因此能读到尚未发布的草稿版本行 —— 管理台据此取编辑基线，
+     * 服务端据此算下一个版本号。
+     */
+    private static final String SQL_FIND_LATEST = "SELECT " + COLUMNS
+            + " FROM cap_tool_def WHERE id = ? ORDER BY version DESC LIMIT 1";
+
     private static final String SQL_FIND_BY_MCP_BINDING = "SELECT " + COLUMNS
             + " FROM cap_tool_def WHERE mcp_server_id = ? AND mcp_tool_name = ?"
             + " AND published_at IS NOT NULL ORDER BY version DESC LIMIT 1";
@@ -93,6 +103,10 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
             + COLUMNS
             + " FROM cap_tool_def WHERE mcp_server_id = ?"
             + " ORDER BY mcp_tool_name, version DESC";
+
+    /** 该 id 的全部版本行（不可变历史，按版本倒序 · 能力目录版本回溯用）。 */
+    private static final String SQL_LIST_VERSIONS = "SELECT " + COLUMNS
+            + " FROM cap_tool_def WHERE id = ? ORDER BY version DESC";
 
     private final DataSource dataSource;
 
@@ -158,6 +172,11 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
     }
 
     @Override
+    public @NonNull Optional<CapToolDef> findLatest(@NonNull String toolId) {
+        return query(SQL_FIND_LATEST, ps -> ps.setString(1, toolId));
+    }
+
+    @Override
     public @NonNull Optional<CapToolDef> findByMcpBinding(@NonNull String mcpServerId,
                                                            @NonNull String mcpToolName) {
         return query(SQL_FIND_BY_MCP_BINDING, ps -> {
@@ -210,6 +229,24 @@ public class JdbcCapToolDefRepository implements CapToolDefPort {
                             out.add(map(rs));
                         }
                         return List.copyOf(out);
+                    }
+                });
+    }
+
+    @Override
+    public @NonNull List<CapToolDef> listVersions(@NonNull String toolId) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_VERSIONS)) {
+                        ps.setString(1, toolId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            List<CapToolDef> out = new java.util.ArrayList<>();
+                            while (rs.next()) {
+                                out.add(map(rs));
+                            }
+                            return List.copyOf(out);
+                        }
                     }
                 });
     }

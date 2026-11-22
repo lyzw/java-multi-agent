@@ -55,6 +55,17 @@
     </select>
 
     <!--
+      SQL_FIND_LATEST：该逻辑 id 的绝对最高版本行（不区分发布状态 · 能力目录版本管理）。
+      ⚠️ 与 SQL_FIND_LATEST_PUBLISHED 的「已发布口径」不同：本查询不过滤 published_at，
+         因此能读到尚未发布的草稿版本行；管理台据此取编辑基线、服务端据此算下一个版本号。
+    -->
+    <select id="findLatest" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapSkillDefDO">
+        <include refid="selectColumns"/>
+        WHERE id = #{id}
+        ORDER BY version DESC LIMIT 1
+    </select>
+
+    <!--
       SQL_LIST_ALL：每个逻辑 id 的最高版本行（只读目录，见 CapSkillDefPort#listAll()）。
       ⚠️ DISTINCT ON + 首列一致的排序键（PG 强制要求）。
     -->
@@ -64,6 +75,17 @@
                risk_ceiling, param_policies::text, required_caps::text, config_fingerprint,
                schema_version, created_at, published_at
         FROM cap_skill_def ORDER BY id, version DESC
+    </select>
+
+
+    <!--
+      SQL_LIST_VERSIONS：该 id 的全部版本行（不可变历史，按版本倒序 · 能力目录版本回溯用）。
+      ⚠️ 与 SQL_LIST_ALL 的「每 id 最高版本」口径不同：这是版本维度的全量历史。
+    -->
+    <select id="listVersions" resultType="cn.studykid.multiagent.infrastructure.persistence.cap.model.CapSkillDefDO">
+        <include refid="selectColumns"/>
+        WHERE id = #{id}
+        ORDER BY version DESC
     </select>
 
 </mapper>

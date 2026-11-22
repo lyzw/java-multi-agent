@@ -60,6 +60,7 @@ import { describeCatalogLoadError } from './platformRequestBits'
 import { describeSubmitResult } from '@/pages/publish/publishBits'
 import { emptyTextWhileLoading } from '@/shared/loadingState'
 import { scrollXOf } from '@/shared/tableLayout'
+import { useColumnVisibility } from '@/shared/tableColumns'
 
 /** Agent 去重聚合后的全局画像 —— 每行 = 一个 Agent 的完整身份，
  *  boundTenants 是该 Agent 被 ACTIVE 绑定的所有租户清单（跨 tenant_agent_binding 聚合）。 */
@@ -681,7 +682,9 @@ export function AgentRegistryPage(): JSX.Element {
         title: '操作',
         key: 'actions',
         fixed: 'right',
-        width: 260,
+        // 4 个小按钮（编辑 / 分配租户 / 停用 / 详情）约需 300px：
+        // 原 260px 会让按钮相互挤压重叠，后方列文字还会从半透明固定列透出。
+        width: 300,
         render: (_, r) => {
           // 以 Agent 为主视角时，「编辑 / 停用」需要指定租户（同一个 Agent 可能被多个租户绑定）。
           // 这里取第一个绑定租户作为默认，若只有一个就直接用。
@@ -720,6 +723,21 @@ export function AgentRegistryPage(): JSX.Element {
     [agentUniq, tenantLabel],
   )
 
+  /**
+   * ⚠️ 16 列在 1440 屏下横向滚动到头也看不全（评测截图：操作列遮住角色/技能列）。
+   * 默认只留一眼决策必需的列：版本 / 时间 / 提示词 / 标签 / 收紧覆盖按需勾选。
+   * 选择按页面存 localStorage，运营下次进入沿用上次视图。
+   */
+  const { visibleColumns: registryVisibleColumns, columnSetting } = useColumnVisibility(
+    registryColumns,
+    {
+      storageKey: 'console-agent-registry',
+      defaultHidden: ['defVersion', 'version', 'latestPublishedAt', 'instructions', 'capabilityTags', 'hasOverrides'],
+      lockedKeys: ['name', 'actions'],
+      label: '列设置',
+    },
+  )
+
   // =================================================================
   // ⑧ 申请队列列（中文优先，UUID 不直接出现在列表）
   // =================================================================
@@ -742,7 +760,7 @@ export function AgentRegistryPage(): JSX.Element {
       title: '操作',
       key: 'actions',
       fixed: 'right',
-      width: 190,
+      width: 210,
       render: (_: unknown, r: PlatformRequestItem) => (
         <Space size="small">
           <Button size="small" disabled={r.state !== 'PENDING'} onClick={() => void doDecision(r.requestId, 'APPROVE')}>批准</Button>
@@ -829,7 +847,8 @@ export function AgentRegistryPage(): JSX.Element {
       {/* ── 主卡：搜索 + 过滤 + 表格 ── */}
       <Card
         extra={
-          <Space>
+          <Space wrap>
+            {columnSetting}
             <Button
               onClick={() => {
                 setQueueTenantId(tenantIds.length === 1 ? tenantIds[0] ?? '' : '')
@@ -881,10 +900,10 @@ export function AgentRegistryPage(): JSX.Element {
           rowKey="agentId"
           loading={loading}
           dataSource={filtered}
-          columns={registryColumns}
+          columns={registryVisibleColumns}
           pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 个 Agent` }}
           size="small"
-          scroll={{ x: scrollXOf(registryColumns) }}
+          scroll={{ x: scrollXOf(registryVisibleColumns) }}
           locale={{ emptyText: emptyTextWhileLoading(loading, '暂无 Agent') }}
           onRow={(r) => ({ onDoubleClick: () => setDetailItem(r) })}
         />

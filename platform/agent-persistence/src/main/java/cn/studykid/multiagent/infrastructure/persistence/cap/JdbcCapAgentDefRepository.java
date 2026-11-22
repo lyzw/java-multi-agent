@@ -273,6 +273,39 @@ public class JdbcCapAgentDefRepository implements CapAgentDefPort {
                 });
     }
 
+    /** 该 Agent 的全部版本行（无绑定过滤，按版本倒序 · 能力目录版本回溯用）。 */
+    private static final String SQL_LIST_VERSIONS_GLOBAL = """
+            SELECT d.agent_id::text, d.version, d.name, d.description,
+                   d.roles::text, d.enabled_skills::text, d.skill_bundles::text,
+                   d.capability_tags::text, d.overrides::text, d.orchestration::text,
+                   d.instructions::text, d.model_ref, d.generation_params::text,
+                   d.config_fingerprint,
+                   d.schema_version, d.created_at, d.published_at
+            FROM cap_agent_def d
+            WHERE d.agent_id = ?::uuid
+            ORDER BY d.version DESC
+            """;
+
+    @Override
+    public @NonNull List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
+        // 无绑定过滤：全局 Agent 可以尚未分配任何租户。用哨兵上下文绑定 RLS。
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(GLOBAL_CONTEXT_TENANT),
+                conn -> {
+                    List<CapAgentDef> rows = new ArrayList<>();
+                    try (PreparedStatement ps =
+                                 conn.prepareStatement(SQL_LIST_VERSIONS_GLOBAL)) {
+                        ps.setString(1, agentId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) {
+                                rows.add(map(rs));
+                            }
+                        }
+                    }
+                    return rows;
+                });
+    }
+
     @Override
     public @NonNull Optional<CapAgentDef> findLatest(@NonNull String tenantId,
                                                       @NonNull String agentId) {

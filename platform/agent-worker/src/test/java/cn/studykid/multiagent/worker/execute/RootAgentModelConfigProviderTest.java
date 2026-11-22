@@ -103,6 +103,11 @@ class RootAgentModelConfigProviderTest {
         }
 
         @Override
+        public @NonNull Optional<CapToolDef> findLatest(@NonNull String toolId) {
+            return Optional.empty();
+        }
+
+        @Override
         public @NonNull Optional<CapToolDef> findByMcpBinding(@NonNull String mcpServerId,
                                                               @NonNull String mcpToolName) {
             return Optional.empty();

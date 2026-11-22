@@ -152,6 +152,16 @@ public class MybatisCapAgentDefRepository implements CapAgentDefPort {
     }
 
     @Override
+    public @NonNull List<CapAgentDef> listVersionsGlobal(@NonNull String agentId) {
+        // 无绑定过滤：全局 Agent 可以尚未分配任何租户。用哨兵上下文绑定 RLS。
+        return inTenantScope(GLOBAL_CONTEXT_TENANT, () -> TransactionalConnectionHolder.inTransaction(
+                dataSource, tenantContext(GLOBAL_CONTEXT_TENANT), conn ->
+                        mapper.listVersionsGlobal(agentId).stream()
+                                .map(MybatisCapAgentDefRepository::toRecord)
+                                .toList()));
+    }
+
+    @Override
     public @NonNull Optional<CapAgentDef> findLatest(@NonNull String tenantId,
                                                       @NonNull String agentId) {
         shadowCompare(RESOURCE_TYPE, tenantId, true);

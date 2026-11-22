@@ -125,6 +125,11 @@ class WorkerChildAgentModelConfigProviderTest {
         }
 
         @Override
+        public @NonNull Optional<CapToolDef> findLatest(@NonNull String toolId) {
+            return Optional.empty();
+        }
+
+        @Override
         public @NonNull Optional<CapToolDef> findByMcpBinding(@NonNull String mcpServerId,
                                                                 @NonNull String operation) {
             return Optional.empty();

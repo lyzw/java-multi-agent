@@ -42,13 +42,47 @@ body {
 }
 
 /* 表格「当前选中行」：左列列表点谁，右列详情就是谁。
-   色值取主题主色（黄铜）的浅底，后一条压过 antd hover 背景。 */
+   色值取主题主色（黄铜）的浅底，后一条压过 antd hover 背景。
+   ⚠️ 用不透明色而非 rgba：固定列在 hover/选中时继承行背景，半透明会让
+   横向滚动后方的单元格文字透到固定列上（表现为操作按钮被"遮挡"）。 */
 .row-selected > td {
-  background-color: rgba(169, 118, 27, 0.1) !important;
+  background-color: #f6f0e4 !important;
 }
 
 .row-selected:hover > td {
-  background-color: rgba(169, 118, 27, 0.16) !important;
+  background-color: #f1e8d6 !important;
+}
+
+/* 固定列在任何行状态下都保持不透明底色：横向滚动时后方内容不得透出。
+   antd 的 .ant-table-cell-fix-left/right 默认走行背景，遇到半透明就会被穿透。 */
+.ant-table-tbody > tr > td.ant-table-cell-fix-left,
+.ant-table-tbody > tr > td.ant-table-cell-fix-right {
+  background-color: var(--dc-surface);
+}
+.ant-table-tbody > tr:hover > td.ant-table-cell-fix-left,
+.ant-table-tbody > tr:hover > td.ant-table-cell-fix-right {
+  background-color: #faf7f1;
+}
+.ant-table-tbody > tr.row-selected > td.ant-table-cell-fix-left,
+.ant-table-tbody > tr.row-selected > td.ant-table-cell-fix-right {
+  background-color: #f6f0e4;
+}
+.ant-table-tbody > tr.row-selected:hover > td.ant-table-cell-fix-left,
+.ant-table-tbody > tr.row-selected:hover > td.ant-table-cell-fix-right {
+  background-color: #f1e8d6;
+}
+
+/* 行尾操作区：允许换行、禁止按钮被 flex 压缩。
+   多个小按钮在固定列里因宽度不足互相挤压/重叠，换行后可完整点中。 */
+.ant-table-cell .ant-space {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.ant-table-cell .ant-space-item {
+  flex: 0 0 auto;
+}
+.ant-table-cell .ant-btn {
+  white-space: nowrap;
 }
 
 /* ---------- 公共数字/等宽 ---------- */
@@ -643,6 +677,44 @@ body {
   color: var(--dc-text-3);
   margin-top: 3px;
   font-family: var(--dc-mono);
+}
+
+/* ---------- 列设置面板：表头「列设置」下拉，控制宽表默认可见列 ---------- */
+.dc-column-panel {
+  min-width: 200px;
+  max-width: 260px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 8px 12px;
+  background: var(--dc-surface);
+  border: 1px solid var(--dc-line);
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgba(22, 33, 31, 0.12);
+}
+.dc-column-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--dc-line-soft);
+  color: var(--dc-text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+.dc-column-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dc-column-panel__body .ant-checkbox-wrapper {
+  font-size: 12.5px;
+  padding: 3px 2px;
+  border-radius: 3px;
+}
+.dc-column-panel__body .ant-checkbox-wrapper:hover {
+  background: var(--dc-paper);
 }
 
 @media (max-width: 1340px) {

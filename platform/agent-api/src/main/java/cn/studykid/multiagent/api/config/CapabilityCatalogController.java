@@ -133,6 +133,50 @@ public class CapabilityCatalogController {
                 lifecycleStateOf("tool", def.id(), def.version())));
     }
 
+    /**
+     * 列出该 Tool 的<b>全部历史版本</b>（不可变历史，按版本倒序 · 能力目录版本管理）。
+     *
+     * <p>⚠️ <b>与 Agent 版本列表同口径</b>：返回精简视图（version / published /
+     * publishedAt / createdAt / configFingerprint），供管理台展示版本时间线与回溯入口。
+     * <b>不</b>用于授权判定中的版本解析（那必须走 {@code PublishedVersionPort}）。
+     *
+     * <p>⚠️ <b>先确认存在性再列版本</b>：避免"不存在的 id 返回空列表 vs 返回 404"的不一致 ——
+     * 统一 404，与单对象读取的行为对齐。
+     */
+    @GetMapping("/tools/{toolId}/versions")
+    public ResponseEntity<List<VersionHistoryItem>> listToolVersions(
+            @PathVariable String toolId) {
+        authorize();
+        if (toolDefs.listVersions(toolId).isEmpty()) {
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在");
+        }
+        return ResponseEntity.ok(toolDefs.listVersions(toolId).stream()
+                .map(d -> VersionHistoryItem.of(d.version(), d.isPublished(),
+                        d.publishedAt(), d.createdAt(), d.configFingerprint()))
+                .toList());
+    }
+
+    /**
+     * 读取 Tool 的<b>可编辑基线版本</b>（最高版本，不区分发布状态 · 编辑入口）。
+     *
+     * <p>⚠️ 编辑<b>只在最高版本之上进行</b>：若最高版本未发布，说明"已有未发布草稿"，
+     * 后续编辑在它之上继续追加；若最高版本已发布，说明"当前线上就是可编辑基线"，
+     * 服务端保存时自动产出下一个版本号（见 {@link PlatformCapabilityPublishService}）。
+     *
+     * <p>⚠️ 已发布版本<b>不可覆盖</b>（DB 层触发器封禁 UPDATE）——
+     * 本端点只是告诉前端"编辑时从哪读"，真正的"保存即新版本号"由服务端写入守卫保证。
+     */
+    @GetMapping("/tools/{toolId}/baseline")
+    public ResponseEntity<ToolResponse> getToolBaseline(@PathVariable String toolId) {
+        authorize();
+        CapToolDef def = toolDefs.findLatest(toolId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在"));
+        return ResponseEntity.ok(ToolResponse.of(def,
+                lifecycleStateOf("tool", def.id(), def.version())));
+    }
+
     // ── Skill ───────────────────────────────────────────────────────
 
     /** 列出全部 Skill 定义（每个逻辑 id 的最高版本）。 */
@@ -157,6 +201,32 @@ public class CapabilityCatalogController {
                 lifecycleStateOf("skill", def.id(), def.version())));
     }
 
+    /** 列出该 Skill 的<b>全部历史版本</b>（不可变历史 · 能力目录版本管理）。 */
+    @GetMapping("/skills/{skillId}/versions")
+    public ResponseEntity<List<VersionHistoryItem>> listSkillVersions(
+            @PathVariable String skillId) {
+        authorize();
+        if (skillDefs.listVersions(skillId).isEmpty()) {
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在");
+        }
+        return ResponseEntity.ok(skillDefs.listVersions(skillId).stream()
+                .map(d -> VersionHistoryItem.of(d.version(), d.isPublished(),
+                        d.publishedAt(), d.createdAt(), d.configFingerprint()))
+                .toList());
+    }
+
+    /** 读取 Skill 的<b>可编辑基线版本</b>（最高版本，不区分发布状态）。 */
+    @GetMapping("/skills/{skillId}/baseline")
+    public ResponseEntity<SkillResponse> getSkillBaseline(@PathVariable String skillId) {
+        authorize();
+        CapSkillDef def = skillDefs.findLatest(skillId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在"));
+        return ResponseEntity.ok(SkillResponse.of(def,
+                lifecycleStateOf("skill", def.id(), def.version())));
+    }
+
     // ── MCP Server ─────────────────────────────────────────────────
 
     /** 列出全部 MCP Server 定义（每个逻辑 id 的最高版本）。 */
@@ -175,6 +245,32 @@ public class CapabilityCatalogController {
         authorize();
         CapMcpServerDef def = serverDefs.findLatestPublished(serverId)
                 .or(() -> serverDefs.find(serverId, Integer.MAX_VALUE))
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在"));
+        return ResponseEntity.ok(McpResponse.of(def,
+                lifecycleStateOf("mcp_server", def.id(), def.version())));
+    }
+
+    /** 列出该 MCP Server 的<b>全部历史版本</b>（不可变历史 · 能力目录版本管理）。 */
+    @GetMapping("/mcps/{serverId}/versions")
+    public ResponseEntity<List<VersionHistoryItem>> listMcpVersions(
+            @PathVariable String serverId) {
+        authorize();
+        if (serverDefs.listVersions(serverId).isEmpty()) {
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在");
+        }
+        return ResponseEntity.ok(serverDefs.listVersions(serverId).stream()
+                .map(d -> VersionHistoryItem.of(d.version(), d.isPublished(),
+                        d.publishedAt(), d.createdAt(), d.configFingerprint()))
+                .toList());
+    }
+
+    /** 读取 MCP Server 的<b>可编辑基线版本</b>（最高版本，不区分发布状态）。 */
+    @GetMapping("/mcps/{serverId}/baseline")
+    public ResponseEntity<McpResponse> getMcpBaseline(@PathVariable String serverId) {
+        authorize();
+        CapMcpServerDef def = serverDefs.findLatest(serverId)
                 .orElseThrow(() -> new ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "资源不存在"));
         return ResponseEntity.ok(McpResponse.of(def,
@@ -480,6 +576,35 @@ public class CapabilityCatalogController {
                     def.connectionRisk().name(), def.dynamicDiscovery(), def.configFingerprint(),
                     def.schemaVersion(), def.createdAt(), def.publishedAt(), def.isPublished(),
                     def.credentialRef() != null, lifecycleState);
+        }
+    }
+
+    /**
+     * 版本历史紧凑视图（供能力目录的版本回溯时间线展示）。
+     *
+     * <p>⚠️ 与 {@link AgentVersionItemResponse} 同构：返回精简字段
+     * （version / published / publishedAt / createdAt / configFingerprint），
+     * 管理台按此绘制"哪个版本什么时候被创建、什么时候被发布"的时间线。
+     * <b>不</b>承载完整配置内容 —— 完整内容由单对象读取端点按 version 精确获取。
+     *
+     * @param version           版本号
+     * @param published         是否已发布
+     * @param publishedAt       发布时间（未发布为 null）
+     * @param createdAt         版本行创建时间（即"保存即新版本"的变更时间戳）
+     * @param configFingerprint 配置内容指纹（服务端自动计算，供快速判断内容是否变化）
+     */
+    public record VersionHistoryItem(
+            int version,
+            boolean published,
+            @Nullable Instant publishedAt,
+            @NonNull Instant createdAt,
+            @NonNull String configFingerprint) {
+        static VersionHistoryItem of(int version, boolean published,
+                                     @Nullable Instant publishedAt,
+                                     @NonNull Instant createdAt,
+                                     @NonNull String configFingerprint) {
+            return new VersionHistoryItem(version, published, publishedAt,
+                    createdAt, configFingerprint);
         }
     }
 }

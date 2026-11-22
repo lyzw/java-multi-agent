@@ -75,6 +75,16 @@ public class JdbcCapMcpServerDefRepository implements CapMcpServerDefPort {
             + " ORDER BY version DESC LIMIT 1";
 
     /**
+     * 该逻辑 id 的绝对最高版本行（不区分发布状态 · 能力目录版本管理）。
+     *
+     * <p>⚠️ 与 {@link #SQL_FIND_LATEST_PUBLISHED} 的「已发布口径」不同：本查询不过滤
+     * {@code published_at}，因此能读到尚未发布的草稿版本行 —— 管理台据此取编辑基线，
+     * 服务端据此算下一个版本号。
+     */
+    private static final String SQL_FIND_LATEST = "SELECT " + COLUMNS
+            + " FROM cap_mcp_server_def WHERE id = ? ORDER BY version DESC LIMIT 1";
+
+    /**
      * 列出全部 MCP Server 定义（各逻辑 id 的最高版本行）。
      *
      * <p>⚠️ 用 {@code (id, version) IN (SELECT id, MAX(version) ...)} 取每 id 最高版本，
@@ -86,6 +96,10 @@ public class JdbcCapMcpServerDefRepository implements CapMcpServerDefPort {
             + "   SELECT id, MAX(version) FROM cap_mcp_server_def GROUP BY id"
             + ")"
             + " ORDER BY id ASC";
+
+    /** 该 id 的全部版本行（不可变历史，按版本倒序 · 能力目录版本回溯用）。 */
+    private static final String SQL_LIST_VERSIONS = "SELECT " + COLUMNS
+            + " FROM cap_mcp_server_def WHERE id = ? ORDER BY version DESC";
 
     private final DataSource dataSource;
 
@@ -144,12 +158,35 @@ public class JdbcCapMcpServerDefRepository implements CapMcpServerDefPort {
     }
 
     @Override
+    public @NonNull Optional<CapMcpServerDef> findLatest(@NonNull String serverId) {
+        return query(SQL_FIND_LATEST, ps -> ps.setString(1, serverId));
+    }
+
+    @Override
     public @NonNull List<CapMcpServerDef> listAll() {
         return TransactionalConnectionHolder.inTransaction(
                 dataSource, platformContext(),
                 conn -> {
                     List<CapMcpServerDef> rows = new ArrayList<>();
                     try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_ALL)) {
+                        try (ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) {
+                                rows.add(map(rs));
+                            }
+                        }
+                    }
+                    return rows;
+                });
+    }
+
+    @Override
+    public @NonNull List<CapMcpServerDef> listVersions(@NonNull String serverId) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    List<CapMcpServerDef> rows = new ArrayList<>();
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_VERSIONS)) {
+                        ps.setString(1, serverId);
                         try (ResultSet rs = ps.executeQuery()) {
                             while (rs.next()) {
                                 rows.add(map(rs));

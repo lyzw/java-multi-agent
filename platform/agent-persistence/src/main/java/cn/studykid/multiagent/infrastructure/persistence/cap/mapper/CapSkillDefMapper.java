@@ -60,6 +60,17 @@ public interface CapSkillDefMapper extends BaseMapper<CapSkillDefDO> {
     /** SQL_FIND_LATEST_PUBLISHED：已发布版本中取最高版本。 */
     Optional<CapSkillDefDO> findLatestPublished(@Param("id") String id);
 
+    /**
+     * SQL_FIND_LATEST：该逻辑 id 的<b>绝对最高版本行</b>（不区分发布状态 · 版本管理守卫）。
+     *
+     * <p>⚠️ 与 SQL_FIND_LATEST_PUBLISHED 的「已发布口径」不同：本方法供版本管理守卫使用 ——
+     * 服务端据此算「下一个版本号 = 最高版本 + 1」，避免已有未发布草稿却撞号。
+     */
+    Optional<CapSkillDefDO> findLatest(@Param("id") String id);
+
     /** SQL_LIST_ALL：每个逻辑 id 的最高版本整行（DISTINCT ON (id)）。 */
     List<CapSkillDefDO> listAll();
+
+    /** SQL_LIST_VERSIONS：该 id 的全部版本行（不可变历史，按版本倒序 · 能力目录版本回溯用）。 */
+    List<CapSkillDefDO> listVersions(@Param("id") String id);
 }

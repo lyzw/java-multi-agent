@@ -117,6 +117,13 @@ public class MybatisCapMcpServerDefRepository implements CapMcpServerDefPort {
     }
 
     @Override
+    public @NonNull Optional<CapMcpServerDef> findLatest(@NonNull String serverId) {
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn -> mapper.findLatest(serverId)
+                        .map(MybatisCapMcpServerDefRepository::toRecord)));
+    }
+
+    @Override
     public @NonNull List<CapMcpServerDef> listAll() {
         return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
                 dataSource, platformContext(), conn ->
@@ -126,6 +133,15 @@ public class MybatisCapMcpServerDefRepository implements CapMcpServerDefPort {
     }
 
     // ── DO → record（逐字段，与旧 JDBC 的 map() 对齐）──
+
+    @Override
+    public @NonNull List<CapMcpServerDef> listVersions(@NonNull String serverId) {
+        return inTenantScope(() -> TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(), conn ->
+                        mapper.listVersions(serverId).stream()
+                                .map(MybatisCapMcpServerDefRepository::toRecord)
+                                .toList()));
+    }
 
     private static CapMcpServerDef toRecord(CapMcpServerDefDO d) {
         return new CapMcpServerDef(

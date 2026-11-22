@@ -53,6 +53,23 @@ public interface CapToolDefPort {
     @NonNull Optional<CapToolDef> findLatestPublished(@NonNull String toolId);
 
     /**
+     * 读取该 Tool 的<b>最高版本行</b>（<b>不区分发布状态</b> · 版本管理守卫）。
+     *
+     * <p>⚠️ 与 {@link #findLatestPublished} 的「已发布口径」不同：本方法取该逻辑 id 的
+     * <b>绝对最高版本</b>—— 可能是已发布版本、也可能是尚未发布的草稿版本。
+     * 服务端据此算「下一个版本号 = 最高版本 + 1」，避免「已有未发布草稿却撞号」的假成功。
+     *
+     * <p>⚠️ 管理台的「编辑」入口<b>以本方法为准</b>：拿最高版本作为编辑基线 ——
+     * 若最高版本已发布，说明「当前可编辑的就是线上生效版本」；
+     * 若最高版本未发布，说明「已有人改过但没发布」，后续编辑继续在该未发布版本上进行
+     * （已发布版本不可覆盖，DB 层有触发器封禁 UPDATE）。
+     *
+     * @param toolId Tool 逻辑 id
+     * @return 最高版本行；无任何版本时为 {@link Optional#empty()}
+     */
+    @NonNull Optional<CapToolDef> findLatest(@NonNull String toolId);
+
+    /**
      * 按 MCP 绑定关系查找工具定义（{@code mcp_server_id + mcp_tool_name}）。
      *
      * <p>⚠️ <b>为什么需要这个反查</b>：MCP 工具<b>不出现在</b> Skill 的
@@ -105,4 +122,16 @@ public interface CapToolDefPort {
      * @return 该 Server 下的 Tool 定义行；无绑定时为空列表
      */
     @NonNull List<CapToolDef> listByMcpServer(@NonNull String mcpServerId);
+
+    /**
+     * 列出该 Tool 的<b>全部版本行</b>（不可变历史，按版本倒序）。
+     *
+     * <p>⚠️ 与 {@link #listAll()} 的「每 id 最高版本」口径不同：本方法是<b>版本维度</b>
+     * 的全量回溯（能力目录版本管理 · 历史版本留存），供管理台展示版本历史与变更轨迹。
+     * <b>不</b>用于授权判定中的版本解析（那必须走 {@link PublishedVersionPort}）。
+     *
+     * @param toolId Tool 逻辑 id
+     * @return 全部版本行，按 version 倒序；无任何版本时为空列表
+     */
+    @NonNull List<CapToolDef> listVersions(@NonNull String toolId);
 }

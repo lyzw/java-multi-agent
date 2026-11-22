@@ -78,12 +78,26 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
             + " ORDER BY version DESC LIMIT 1";
 
     /**
+     * 该逻辑 id 的绝对最高版本行（不区分发布状态 · 能力目录版本管理）。
+     *
+     * <p>⚠️ 与 {@link #SQL_FIND_LATEST_PUBLISHED} 的「已发布口径」不同：本查询不过滤
+     * {@code published_at}，因此能读到尚未发布的草稿版本行 —— 管理台据此取编辑基线，
+     * 服务端据此算下一个版本号。
+     */
+    private static final String SQL_FIND_LATEST = "SELECT " + COLUMNS
+            + " FROM cap_skill_def WHERE id = ? ORDER BY version DESC LIMIT 1";
+
+    /**
      * 每个逻辑 id 的最高版本行（只读目录，见 {@link CapSkillDefPort#listAll()}）。
      *
      * <p>⚠️ {@code DISTINCT ON} + 首列一致的排序键（PG 强制要求）。
      */
     private static final String SQL_LIST_ALL = "SELECT DISTINCT ON (id) " + COLUMNS
             + " FROM cap_skill_def ORDER BY id, version DESC";
+
+    /** 该 id 的全部版本行（不可变历史，按版本倒序 · 能力目录版本回溯用）。 */
+    private static final String SQL_LIST_VERSIONS = "SELECT " + COLUMNS
+            + " FROM cap_skill_def WHERE id = ? ORDER BY version DESC";
 
     private final DataSource dataSource;
 
@@ -148,6 +162,11 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
         return query(SQL_FIND_LATEST_PUBLISHED, ps -> ps.setString(1, skillId));
     }
 
+    @Override
+    public @NonNull Optional<CapSkillDef> findLatest(@NonNull String skillId) {
+        return query(SQL_FIND_LATEST, ps -> ps.setString(1, skillId));
+    }
+
     private @NonNull Optional<CapSkillDef> query(@NonNull String sql,
                                                   @NonNull StatementBinder binder) {
         return TransactionalConnectionHolder.inTransaction(
@@ -174,6 +193,24 @@ public class JdbcCapSkillDefRepository implements CapSkillDefPort {
                             out.add(map(rs));
                         }
                         return List.copyOf(out);
+                    }
+                });
+    }
+
+    @Override
+    public @NonNull List<CapSkillDef> listVersions(@NonNull String skillId) {
+        return TransactionalConnectionHolder.inTransaction(
+                dataSource, platformContext(),
+                conn -> {
+                    try (PreparedStatement ps = conn.prepareStatement(SQL_LIST_VERSIONS)) {
+                        ps.setString(1, skillId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            List<CapSkillDef> out = new java.util.ArrayList<>();
+                            while (rs.next()) {
+                                out.add(map(rs));
+                            }
+                            return List.copyOf(out);
+                        }
                     }
                 });
     }

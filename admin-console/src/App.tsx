@@ -71,7 +71,9 @@ const controlSurfaceTheme = {
       headerColor: '#586862',
       headerSplitColor: 'transparent',
       headerFontWeight: 600,
-      rowHoverBg: 'rgba(169,118,27,0.05)',
+      // ⚠️ 必须是不透明色：固定列（fixed left/right）在 hover 时继承行背景，
+      // 半透明 rgba 会让横向滚动后方的单元格文字透到固定列上（操作按钮被"遮挡"）。
+      rowHoverBg: '#faf7f1',
       borderColor: '#E8EBE6',
       cellPaddingBlock: 12,
       cellPaddingInline: 16,
