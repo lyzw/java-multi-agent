@@ -7,7 +7,7 @@ import dayjs from 'dayjs'
 import { DeleteOutlined, DiffOutlined, HistoryOutlined, SwapOutlined } from '@ant-design/icons'
 import { cleanupAgentVersions, getPlatformAgentDefinitionVersions } from '@/api/adminApi'
 import type { AgentDefinition } from '@/api/types'
-import { diffJson, diffSummary, type JsonDiffLine } from '@/shared/jsonDiff'
+import { diffJson, diffSummary, toJsonDiffLines, type JsonDiffLine, type JsonTextLine } from '@/shared/jsonDiff'
 import { emptyTextWhileLoading } from '@/shared/loadingState'
 
 /**
@@ -311,25 +311,44 @@ function safeParse(raw: string | undefined | null): unknown {
 function ConfigDiffModal({
   open, onClose, before, after, raw,
 }: ConfigDiffModalProps): JSX.Element | null {
-  const [view, setView] = useState<'unified' | 'side'>('unified')
+  const [view, setView] = useState<'unified' | 'side'>('side')
 
   /**
    * ⚠️ 两种数据来源，优先级：记录自带的 raw > 版本对象。
    * raw 是变更记录随记录下发的「确定的 before/after」，
    * 不依赖版本号相邻推算，因此优先。
    */
-  const lines: JsonDiffLine[] = useMemo(() => {
+  /**
+   * 前后两份配置的 JSON 原文。
+   * ⚠️ 对比以 **JSON 文本** 呈现：规范化缩进后逐行标注变更，
+   * 用户看到的就是一份完整、可复制的 JSON，而不是被拆散的路径表。
+   */
+  const jsonText = useMemo<{ before: string | null; after: string | null }>(() => {
     if (raw) {
-      return diffJson(raw.before, raw.after)
+      return { before: raw.before, after: raw.after }
     }
-    if (!before || !after) return []
-    return diffJson(
-      JSON.stringify(toComparable(before), null, 2),
-      JSON.stringify(toComparable(after), null, 2),
-    )
+    if (!before || !after) return { before: null, after: null }
+    return {
+      before: JSON.stringify(toComparable(before), null, 2),
+      after: JSON.stringify(toComparable(after), null, 2),
+    }
   }, [raw, before, after])
 
-  useEffect(() => { if (!open) setView('unified') }, [open])
+  const lines: JsonDiffLine[] = useMemo(
+    () => diffJson(jsonText.before, jsonText.after),
+    [jsonText],
+  )
+
+  const beforeLines = useMemo(
+    () => toJsonDiffLines(jsonText.before, jsonText.after, 'before'),
+    [jsonText],
+  )
+  const afterLines = useMemo(
+    () => toJsonDiffLines(jsonText.before, jsonText.after, 'after'),
+    [jsonText],
+  )
+
+  useEffect(() => { if (!open) setView('side') }, [open])
 
   const hasContent = raw ? raw.after != null : after != null
   if (!open || !hasContent) return null
@@ -383,113 +402,150 @@ function ConfigDiffModal({
             value={view}
             onChange={(v) => setView(v as 'unified' | 'side')}
             options={[
-              { label: '统一视图', value: 'unified' },
-              { label: '并排视图', value: 'side' },
+              { label: '并排 JSON', value: 'side' },
+              { label: '统一 JSON', value: 'unified' },
             ]}
           />
         </Space>
 
         {lines.length === 0 ? (
           <Alert type="success" showIcon message="两版配置完全一致（仅版本号/时间不同）" />
-        ) : view === 'unified' ? (
-          <UnifiedDiff lines={lines} />
+        ) : view === 'side' ? (
+          <SideBySideJson
+            beforeLines={beforeLines}
+            afterLines={afterLines}
+            beforeLabel={raw ? '变更前' : `v${before?.version ?? '?'}（变更前）`}
+            afterLabel={raw ? '变更后' : `v${after?.version ?? '?'}（变更后）`}
+          />
         ) : (
-          <SideBySideDiff lines={lines} beforeLabel={raw ? '变更前' : `v${before?.version ?? '?'}（变更前）`} afterLabel={raw ? '变更后' : `v${after?.version ?? '?'}（变更后）`} />
+          <UnifiedJson lines={afterLines} allLines={lines} />
         )}
       </Space>
     </Modal>
   )
 }
 
-const KIND_STYLE: Record<JsonDiffLine['kind'], { bg: string; color: string; sign: string; label: string }> = {
+const KIND_STYLE: Record<'added' | 'removed' | 'changed', { bg: string; color: string; sign: string; label: string }> = {
   added: { bg: '#E9F5F1', color: '#1C6E5E', sign: '+', label: '新增' },
   removed: { bg: '#FCEAE7', color: '#B23A2E', sign: '-', label: '删除' },
   changed: { bg: '#FFF5E3', color: '#A9761B', sign: '~', label: '修改' },
 }
 
-function DiffFrame({ children }: { children: React.ReactNode }): JSX.Element {
+/**
+ * JSON 行渲染框 —— 等宽字体、保留缩进、行内高亮变更。
+ *
+ * <p>⚠️ 每行保留原始缩进与逗号，整块拼起来就是一份<b>合法 JSON</b>，
+ * 用户可以直接复制出去用；而不是被拆成「路径 + 值」的表格。
+ */
+function JsonLines({
+  lines,
+  emptyText,
+}: {
+  lines: JsonTextLine[]
+  emptyText: string
+}): JSX.Element {
+  if (lines.length === 0) {
+    return <div style={{ color: '#8B9791', fontFamily: 'monospace', fontSize: 12, padding: 8 }}>{emptyText}</div>
+  }
   return (
     <div style={{
-      border: '1px solid #E8EBE6', borderRadius: 6, padding: 8,
+      border: '1px solid #E8EBE6', borderRadius: 6, padding: '8px 0',
       maxHeight: 460, overflow: 'auto', fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12,
+      lineHeight: 1.6, background: '#FFFFFF',
     }}>
-      {children}
-    </div>
-  )
-}
-
-function UnifiedDiff({ lines }: { lines: JsonDiffLine[] }): JSX.Element {
-  return (
-    <DiffFrame>
-      {lines.map((l) => {
-        const s = KIND_STYLE[l.kind]
+      {lines.map((l, i) => {
+        const s = l.kind ? KIND_STYLE[l.kind] : null
         return (
-          <div key={l.path} style={{ padding: '3px 4px', background: s.bg, marginBottom: 2, borderRadius: 3 }}>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
-              <span style={{ color: s.color, width: 12, flex: 'none' }}>{s.sign}</span>
-              <Tag color={l.kind === 'added' ? 'green' : l.kind === 'removed' ? 'red' : 'gold'}
-                   style={{ marginRight: 0 }}>
-                {s.label}
-              </Tag>
-              <span style={{ color: '#1B2624', fontWeight: 600, wordBreak: 'break-all' }}>{l.path}</span>
-            </div>
-            {l.kind !== 'added' && l.before != null && (
-              <div style={{ color: '#B23A2E', paddingLeft: 20, wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
-                − {l.before}
-              </div>
-            )}
-            {l.kind !== 'removed' && l.after != null && (
-              <div style={{ color: '#1C6E5E', paddingLeft: 20, wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
-                + {l.after}
-              </div>
-            )}
+          <div
+            key={`${i}-${l.path}`}
+            style={{
+              display: 'flex',
+              background: s ? s.bg : 'transparent',
+              borderLeft: s ? `3px solid ${s.color}` : '3px solid transparent',
+              paddingRight: 8,
+            }}
+          >
+            {/* 变更标记列：保持等宽，未变更行留空格 */}
+            <span style={{
+              width: 16, flex: 'none', textAlign: 'center',
+              color: s ? s.color : '#C9D1CC', userSelect: 'none',
+            }}>
+              {s ? s.sign : '·'}
+            </span>
+            <pre style={{
+              margin: 0, whiteSpace: 'pre', overflow: 'visible',
+              color: s ? s.color : '#1B2624', fontWeight: s ? 600 : 400,
+            }}>
+              {l.text}
+            </pre>
           </div>
         )
       })}
-    </DiffFrame>
+    </div>
   )
 }
 
-function SideBySideDiff({
-  lines, beforeLabel, afterLabel,
-}: { lines: JsonDiffLine[]; beforeLabel: string; afterLabel: string }): JSX.Element {
+/**
+ * 并排 JSON 视图：左「变更前」、右「变更后」，各自是完整 JSON。
+ *
+ * <p>⚠️ 两侧<b>行号对齐</b>用同一套结构渲染（都基于 after 结构的下标），
+ * 因此左栏缺失的行以空白占位，避免用户横向误读。
+ */
+function SideBySideJson({
+  beforeLines, afterLines, beforeLabel, afterLabel,
+}: {
+  beforeLines: JsonTextLine[]
+  afterLines: JsonTextLine[]
+  beforeLabel: string
+  afterLabel: string
+}): JSX.Element {
   return (
     <div style={{ display: 'flex', gap: 12 }}>
-      <div style={{ flex: 1 }}>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {beforeLabel}
-        </Typography.Text>
-        <DiffFrame>
-          {lines.map((l) => (
-            <div key={l.path} style={{ padding: '3px 4px', borderRadius: 3, marginBottom: 2,
-              background: l.kind === 'removed' ? KIND_STYLE.removed.bg : 'transparent' }}>
-              <div style={{ color: '#586862', wordBreak: 'break-all', fontWeight: 600 }}>{l.path}</div>
-              <div style={{ color: '#B23A2E', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
-                {l.before ?? '（无）'}
-              </div>
-            </div>
-          ))}
-          {lines.length === 0 && <div style={{ color: '#8B9791' }}>（无差异）</div>}
-        </DiffFrame>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>{beforeLabel}</Typography.Text>
+        <JsonLines lines={beforeLines} emptyText="（变更前不存在该配置）" />
       </div>
-      <div style={{ flex: 1 }}>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {afterLabel}
-        </Typography.Text>
-        <DiffFrame>
-          {lines.map((l) => (
-            <div key={l.path} style={{ padding: '3px 4px', borderRadius: 3, marginBottom: 2,
-              background: l.kind === 'added' ? KIND_STYLE.added.bg
-                : l.kind === 'changed' ? KIND_STYLE.changed.bg : 'transparent' }}>
-              <div style={{ color: '#586862', wordBreak: 'break-all', fontWeight: 600 }}>{l.path}</div>
-              <div style={{ color: '#1C6E5E', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
-                {l.after ?? '（无）'}
-              </div>
-            </div>
-          ))}
-          {lines.length === 0 && <div style={{ color: '#8B9791' }}>（无差异）</div>}
-        </DiffFrame>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>{afterLabel}</Typography.Text>
+        <JsonLines lines={afterLines} emptyText="（变更后不存在该配置）" />
       </div>
     </div>
+  )
+}
+
+/**
+ * 统一 JSON 视图：只渲染「变更后」的完整 JSON，
+ * 但每行按差异着色（新增 / 修改），删除的行以摘要列出。
+ *
+ * <p>⚠️ <b>为什么删除行单独列出</b>：统一视图保留的是<b>变更后</b>结构的完整性
+ * （依然是一份合法 JSON）；被删除的行塞进 JSON 里会破坏语法。
+ * 因此删除项在 JSON 下方以「已删除」清单呈现，既不破损 JSON 也不丢信息。
+ */
+function UnifiedJson({
+  lines, allLines,
+}: {
+  lines: JsonTextLine[]
+  allLines: JsonDiffLine[]
+}): JSX.Element {
+  const removed = allLines.filter((l) => l.kind === 'removed')
+  return (
+    <Space direction="vertical" size="small" style={{ width: '100%' }}>
+      <JsonLines lines={lines} emptyText="（变更后不存在该配置）" />
+      {removed.length > 0 && (
+        <div style={{
+          border: '1px solid #F3D9D4', borderRadius: 6, padding: 8,
+          background: '#FCEAE7', fontFamily: 'monospace', fontSize: 12,
+        }}>
+          <Typography.Text strong style={{ color: '#B23A2E' }}>
+            已删除的配置项（{removed.length}）
+          </Typography.Text>
+          {removed.map((l) => (
+            <div key={l.path} style={{ color: '#B23A2E', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
+              − {l.path}: {l.before}
+            </div>
+          ))}
+        </div>
+      )}
+    </Space>
   )
 }

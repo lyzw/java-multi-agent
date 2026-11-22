@@ -101,10 +101,11 @@ describe('Agent 变更历史：展示 / 清理 / 双击配置对比', () => {
     const modal = document.querySelector('.ant-modal-content') as HTMLElement
     expect(modal).toBeTruthy()
     const text = modal.textContent ?? ''
-    // 变更路径精确定位到字段，而非泛泛的「某个 key 变了」
+    // 以 JSON 呈现前后两份配置
     expect(text).toContain('modelRef')
+    expect(text).toContain('gpt-4o-mini')
     expect(text).toContain('gpt-4o')
-    expect(text).toContain('enabledSkills[0]')
+    // 变更后 JSON 含新增的 skill 元素
     expect(text).toContain('skill-a')
     // 统计标签
     expect(text).toContain('+1')

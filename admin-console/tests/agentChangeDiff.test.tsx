@@ -57,10 +57,13 @@ describe('变更记录自带 before/after → 配置对比', () => {
     await waitFor(() => expect(screen.getByText(/定义发布 · 配置对比/)).toBeTruthy())
     const modal = document.querySelector('.ant-modal-content') as HTMLElement
     const text = modal.textContent ?? ''
-    // 前后值都来自记录本身
+    // 前后值都来自记录本身，并以前后两份 JSON 呈现
     expect(text).toContain('modelRef')
     expect(text).toContain('gpt-4o-mini')
-    expect(text).toContain('enabledSkills[1]')
+    // 变更后的 JSON 里包含新增的数组元素
+    expect(text).toContain('"b"')
+    // 变更前的 JSON 里只有旧值
+    expect(text).toContain('"gpt-4o"')
     // 记录来源的说明文案
     expect(text).toContain('变更记录中保存的变更前配置')
     // 统计
