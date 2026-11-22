@@ -39,6 +39,22 @@
         resource_kind, resource_id, target_version, fail_stage, fail_details::text
     </sql>
 
+    <!--
+      INSERT（带变更前配置快照）：
+      ⚠️ before_payload 与 payload 同一 INSERT 写入 —— 「变更前」必须是提交这一刻的快照，
+         事后反查 cap_agent_def 会因清理 / 再次变更而失真。
+      ⚠️ before_payload 为 NULL 时写 SQL NULL（表示无基线，如新建对象）。
+    -->
+    <select id="insertRequestWithBefore" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigPublishRequestDO">
+        INSERT INTO cap_config_publish_request
+            (tenant_id, scope, operation, payload, before_payload, reason, requester_id, state)
+        VALUES (#{tenantId}::uuid, #{scope}, #{operation},
+                #{payload,typeHandler=cn.studykid.multiagent.infrastructure.persistence.cap.JsonbTypeHandler}::jsonb,
+                #{beforePayload,typeHandler=cn.studykid.multiagent.infrastructure.persistence.cap.JsonbTypeHandler}::jsonb,
+                #{reason}, #{requesterId}, 'PENDING')
+        RETURNING request_id::text, requested_at
+    </select>
+
     <select id="insertRequest" resultType="cn.studykid.multiagent.infrastructure.persistence.model.ConfigPublishRequestDO">
         INSERT INTO cap_config_publish_request
             (tenant_id, scope, operation, payload, reason, requester_id, state)

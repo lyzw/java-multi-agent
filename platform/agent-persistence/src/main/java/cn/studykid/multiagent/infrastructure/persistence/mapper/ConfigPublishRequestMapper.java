@@ -30,6 +30,19 @@ public interface ConfigPublishRequestMapper extends BaseMapper<ConfigPublishRequ
                                                    @Param("reason") String reason,
                                                    @Param("requesterId") String requesterId);
 
+    /**
+     * INSERT（带变更前快照）... RETURNING request_id::text, requested_at。
+     *
+     * <p>⚠️ {@code beforePayload} 为 {@code null} 时写入 SQL NULL（无基线）。
+     */
+    Optional<ConfigPublishRequestDO> insertRequestWithBefore(@Param("tenantId") String tenantId,
+                                                             @Param("scope") String scope,
+                                                             @Param("operation") String operation,
+                                                             @Param("payload") String payload,
+                                                             @Param("beforePayload") String beforePayload,
+                                                             @Param("reason") String reason,
+                                                             @Param("requesterId") String requesterId);
+
     /** SELECT by request_id（租户维度由 IS NOT DISTINCT FROM + RLS 共同保证）。 */
     Optional<ConfigPublishRequestDO> find(@Param("tenantId") String tenantId,
                                           @Param("requestId") String requestId);

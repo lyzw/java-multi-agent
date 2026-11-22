@@ -165,19 +165,31 @@ public class JdbcPlatformAgentDirectoryRepository implements PlatformAgentDirect
                        WHERE ag ->> 'agentId' = ?
                        LIMIT 1
                    )::text                   AS after_config,
-                   -- before_config：target_version 之前的最大版本配置（变更前）
-                   --   ⚠️ 用 `version < target_version` 取最大，而非 `= target_version - 1`：
-                   --      清理草稿后版本号不连续，-1 会命中不存在的行。
-                   CASE WHEN pr.target_version IS NULL THEN NULL
-                        ELSE (
-                            SELECT to_jsonb(d)
-                            FROM cap_agent_def d
-                            WHERE d.agent_id = ?::uuid
-                              AND d.version < pr.target_version
-                            ORDER BY d.version DESC
-                            LIMIT 1
-                        )::text
-                   END                       AS before_config
+                   -- before_config：变更前配置快照
+                   --   ⚠️ **首选 before_payload 列**（提交申请时写入的当刻快照）；
+                   --      事后反查 cap_agent_def 会因清理 / 再次变更而失真。
+                   --   ⚠️ before_payload 为 NULL（升级前历史行）才回退按版本号反查。
+                   COALESCE(
+                       (
+                           SELECT ag::text
+                           FROM jsonb_array_elements(
+                                    CASE WHEN jsonb_typeof(pr.before_payload -> 'agents') = 'array'
+                                         THEN pr.before_payload -> 'agents'
+                                         ELSE '[]'::jsonb END) ag
+                           WHERE ag ->> 'agentId' = ?
+                           LIMIT 1
+                       ),
+                       CASE WHEN pr.target_version IS NULL THEN NULL
+                            ELSE (
+                                SELECT to_jsonb(d)
+                                FROM cap_agent_def d
+                                WHERE d.agent_id = ?::uuid
+                                  AND d.version < pr.target_version
+                                ORDER BY d.version DESC
+                                LIMIT 1
+                            )::text
+                       END
+                   )                         AS before_config
             FROM cap_config_publish_request pr
             WHERE EXISTS (
                       SELECT 1
@@ -218,11 +230,12 @@ public class JdbcPlatformAgentDirectoryRepository implements PlatformAgentDirect
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(CHANGES_SQL)) {
             ps.setString(1, agentId);   // after_config 子查询（payload 匹配）
-            ps.setString(2, agentId);   // before_config 子查询（cap_agent_def 匹配）
-            ps.setString(3, agentId);   // WHERE EXISTS（payload 匹配）
-            ps.setString(4, agentId);   // WHERE lifecycle objectId
-            ps.setString(5, agentId);   // WHERE resource_id
-            ps.setInt(6, size);
+            ps.setString(2, agentId);   // before_config 快照子查询（before_payload 匹配）
+            ps.setString(3, agentId);   // before_config 回退子查询（cap_agent_def 匹配）
+            ps.setString(4, agentId);   // WHERE EXISTS（payload 匹配）
+            ps.setString(5, agentId);   // WHERE lifecycle objectId
+            ps.setString(6, agentId);   // WHERE resource_id
+            ps.setInt(7, size);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     Timestamp requestedAt = rs.getTimestamp("requested_at");

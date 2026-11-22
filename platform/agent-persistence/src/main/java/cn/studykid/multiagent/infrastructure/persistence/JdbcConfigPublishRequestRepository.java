@@ -154,6 +154,61 @@ public class JdbcConfigPublishRequestRepository implements ConfigPublishRequestP
     }
 
     @Override
+    public ConfigPublishRequest insertWithBeforeSnapshot(
+            @Nullable String tenantId,
+            ConfigPublishRequest.@NonNull Operation operation,
+            @NonNull String payload,
+            @Nullable String beforePayload,
+            @NonNull String reason,
+            @NonNull String requesterId) {
+        return TransactionalConnectionHolder.inTransaction(dataSource,
+                tenantContext(tenantId),
+                conn -> {
+                    // ⚠️ before_payload 与 payload 同一 INSERT 写入：
+                    //    「变更前」必须是提交这一刻的快照，事后反查不可靠
+                    //    （目标版本可能被清理 / 再次变更）。
+                    String sql = """
+                            INSERT INTO cap_config_publish_request
+                                (tenant_id, scope, operation, payload, before_payload, reason, requester_id, state)
+                            VALUES (?::uuid, ?, ?, ?::jsonb, ?::jsonb, ?, ?, 'PENDING')
+                            RETURNING request_id::text, requested_at
+                            """;
+                    String requestId;
+                    Instant requestedAt;
+                    try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                        bindTenant(ps, 1, tenantId);
+                        ps.setString(2, scopeOf(tenantId).name());
+                        ps.setString(3, operation.name());
+                        ps.setString(4, payload);
+                        if (beforePayload == null) {
+                            ps.setNull(5, java.sql.Types.VARCHAR);
+                        } else {
+                            ps.setString(5, beforePayload);
+                        }
+                        ps.setString(6, reason);
+                        ps.setString(7, requesterId);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (!rs.next()) {
+                                throw new IllegalStateException("变更申请插入未返回 request_id");
+                            }
+                            requestId = rs.getString(1);
+                            requestedAt = rs.getTimestamp(2).toInstant();
+                        }
+                    }
+                    // 审计与状态变更同事务（同 insert 的约定）：审计失败则整单回滚。
+                    audit.recordRequired(auditTenant(tenantId), requesterId,
+                            AuditPort.Actions.CONFIG_PUBLISH_REQUEST, "config_publish_request",
+                            requestId, Map.of("operation", operation.name()));
+                    return new ConfigPublishRequest(requestId, tenantId,
+                            operation, payload, reason,
+                            requesterId, ConfigPublishRequest.State.PENDING,
+                            null, null, requestedAt, null, null, null,
+                            scopeOf(tenantId),
+                            null, null, null, null, null);
+                });
+    }
+
+    @Override
     @NonNull
     @SuppressWarnings("java:S2077") // 安全：SQL 由常量列名(selectColumns()) + 静态子句拼接，动态值全部经 PreparedStatement 参数绑定，无用户输入拼入。
     public Optional<ConfigPublishRequest> find(@Nullable String tenantId,

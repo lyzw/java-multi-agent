@@ -57,6 +57,37 @@ public interface ConfigPublishRequestPort {
                                          @NonNull String requesterId);
 
     /**
+     * 登记一条申请单，<b>同时记录变更前配置快照</b>。
+     *
+     * <p>⚠️ <b>为什么必须落库而不是事后反查</b>：变更记录的「修改前」若靠查询时
+     * 反查 {@code cap_agent_def} 的旧版本，会受两个因素破坏 ——
+     * ① 申请单本身可能没写版本号；② 事后查询时目标版本可能已被清理或再次变更。
+     * 只有在<b>提交申请这一刻</b>把当时的权威配置快照存下来，「修改前」才是可自证的证据。
+     *
+     * <p>⚠️ <b>快照由服务端计算</b>：不能采信客户端随请求提交的 before ——
+     * 否则这份对比证据就是调用方自己写的，失去复核价值。
+     *
+     * @param tenantId      租户标识；<b>PLATFORM 作用域传 {@code null}</b>
+     * @param operation     变更类型
+     * @param payload       变更方案原文（变更<b>后</b>，JSON 文本）
+     * @param beforePayload 变更前配置快照（JSON 文本）；{@code null} = 无基线
+     * @param reason        变更理由
+     * @param requesterId   申请人主体标识
+     * @return 落库后的申请单
+     */
+    default @NonNull ConfigPublishRequest insertWithBeforeSnapshot(
+            @Nullable String tenantId,
+            ConfigPublishRequest.@NonNull Operation operation,
+            @NonNull String payload,
+            @Nullable String beforePayload,
+            @NonNull String reason,
+            @NonNull String requesterId) {
+        // ⚠️ 默认实现丢弃快照，仅为兼容既有实现类；
+        //    生产实现（Jdbc / MyBatis）必须覆写以真正持久化。
+        return insert(tenantId, operation, payload, reason, requesterId);
+    }
+
+    /**
      * 读取一条申请单。
      *
      * @param tenantId  租户标识；<b>PLATFORM 作用域传 {@code null}</b>

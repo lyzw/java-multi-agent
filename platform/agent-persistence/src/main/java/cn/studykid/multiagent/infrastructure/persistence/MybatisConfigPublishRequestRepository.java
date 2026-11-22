@@ -114,6 +114,36 @@ public class MybatisConfigPublishRequestRepository implements ConfigPublishReque
     }
 
     @Override
+    public ConfigPublishRequest insertWithBeforeSnapshot(
+            @Nullable String tenantId,
+            ConfigPublishRequest.@NonNull Operation operation,
+            @NonNull String payload,
+            @Nullable String beforePayload,
+            @NonNull String reason,
+            @NonNull String requesterId) {
+        return inTenantScope(tenantId, () -> TransactionalConnectionHolder.inTransaction(
+                dataSource, context(tenantId), conn -> {
+                    // ⚠️ before_payload 与 payload 同一条 INSERT：「变更前」是提交时刻的快照。
+                    ConfigPublishRequestDO inserted = mapper.insertRequestWithBefore(
+                            tenantId, scopeOf(tenantId).name(), operation.name(),
+                            payload, beforePayload, reason, requesterId)
+                            .orElseThrow(() -> new IllegalStateException("变更申请插入未返回 request_id"));
+                    String requestId = inserted.getRequestId();
+                    Instant requestedAt = inserted.getRequestedAt();
+                    // 审计与状态变更同事务（同 insert 的约定）。
+                    audit.recordRequired(auditTenant(tenantId), requesterId,
+                            AuditPort.Actions.CONFIG_PUBLISH_REQUEST, "config_publish_request",
+                            requestId, Map.of("operation", operation.name()));
+                    return new ConfigPublishRequest(requestId, tenantId,
+                            operation, payload, reason,
+                            requesterId, ConfigPublishRequest.State.PENDING,
+                            null, null, requestedAt, null, null, null,
+                            scopeOf(tenantId),
+                            null, null, null, null, null);
+                }));
+    }
+
+    @Override
     @NonNull
     public Optional<ConfigPublishRequest> find(@Nullable String tenantId,
                                                 @NonNull String requestId) {

@@ -81,6 +81,17 @@ class PlatformCapabilityPublishServiceTest {
         final List<String> marks = new ArrayList<>();
         String lastPayload;
         String lastTenantId = "<unset>";
+        /** 最近一次写入的「变更前」快照（null = 无基线）。 */
+        String lastBeforePayload = "<unset>";
+
+        @Override
+        public ConfigPublishRequest insertWithBeforeSnapshot(String tenantId,
+                                                             ConfigPublishRequest.Operation operation,
+                                                             String payload, String beforePayload,
+                                                             String reason, String requesterId) {
+            lastBeforePayload = beforePayload;
+            return insert(tenantId, operation, payload, reason, requesterId);
+        }
 
         @Override
         public ConfigPublishRequest insert(String tenantId,
@@ -285,6 +296,49 @@ class PlatformCapabilityPublishServiceTest {
                 row.inputSchema(), row.paramPolicies(), "查询课程表",
                 row.configFingerprint(), row.schemaVersion(), row.createdAt(), row.publishedAt());
         assertThat(CapObjectFingerprint.of(changed)).isNotEqualTo(row.configFingerprint());
+    }
+
+    @Test
+    @DisplayName("✅ 提交申请时把「变更前」配置快照一并落库（对比才有基线）")
+    void beforeSnapshotIsCapturedOnSubmit() {
+        // 当前已存在 tool-1 的定义 → 它应成为本次变更的「变更前」
+        CapToolDef existing = new CapToolDef("tool-1", 3, "旧名字",
+                CapToolKind.NATIVE, CapabilityRiskLevel.READ,
+                null, null, "{}", "{}", "fp-3", 1, CLOCK.instant(), CLOCK.instant());
+        when(toolDefs.findLatest("tool-1")).thenReturn(Optional.of(existing));
+
+        service().requestPublish(List.of(toolSpec("tool-1")), List.of(), List.of(),
+                null, "调整工具描述", REQUESTER);
+
+        String before = requests.lastBeforePayload;
+        assertThat(before).as("变更前快照必须落库，否则对比拿不到修改前数据").isNotNull();
+        assertThat(before).contains("tool-1");
+        assertThat(before).contains("旧名字");
+        assertThat(before).contains("\"version\":3");
+    }
+
+    @Test
+    @DisplayName("✅ 新建对象（无既有定义）时快照为空，而不是臆造空配置")
+    void beforeSnapshotIsNullForNewObject() {
+        when(toolDefs.findLatest("tool-new")).thenReturn(Optional.empty());
+
+        service().requestPublish(List.of(toolSpec("tool-new")), List.of(), List.of(),
+                null, "新建工具", REQUESTER);
+
+        assertThat(requests.lastBeforePayload).isNull();
+    }
+
+    @Test
+    @DisplayName("✅ 快照读取失败不阻断申请（快照是辅助证据）")
+    void beforeSnapshotFailureDoesNotBlockRequest() {
+        when(toolDefs.findLatest("tool-1")).thenThrow(new IllegalStateException("库连接异常"));
+
+        // 不抛异常，申请仍然建立
+        var created = service().requestPublish(List.of(toolSpec("tool-1")), List.of(), List.of(),
+                null, "调整", REQUESTER);
+
+        assertThat(created).isNotNull();
+        assertThat(requests.lastBeforePayload).isNull();
     }
 
     @Test

@@ -85,6 +85,10 @@ public class PlatformCapabilityPublishService {
     public static final Set<String> PLATFORM_LIFECYCLE_OBJECT_TYPES =
             Set.of("tool", "skill", "mcp_server");
 
+    /** 变更前快照的序列化器（Jackson 3，与 ConfigPublishPayload 同源）。 */
+    private static final tools.jackson.databind.ObjectMapper SNAPSHOT_MAPPER =
+            new tools.jackson.databind.ObjectMapper();
+
     private final PlatformOpsSessionPort session;
     private final ConfigPublishRequestPort requests;
     private final ConfigPublishService publisher;
@@ -378,8 +382,135 @@ public class PlatformCapabilityPublishService {
         if (reason == null || reason.isBlank()) {
             throw new IllegalArgumentException("变更理由不能为空");
         }
-        return session.inPlatformScopeSession(() -> requests.insert(
-                null, payload.operation(), payload.toJson(), reason, requesterId));
+        // ⚠️ 变更前快照必须在**提交这一刻**由服务端计算并落库：
+        //    事后反查权威表会因目标版本被清理 / 再次变更而失真，
+        //    而客户端提交的「变更前」没有证据价值（调用方自己写的）。
+        String beforePayload = snapshotBefore(payload);
+        return session.inPlatformScopeSession(() -> requests.insertWithBeforeSnapshot(
+                null, payload.operation(), payload.toJson(), beforePayload, reason, requesterId));
+    }
+
+    /**
+     * 计算本次变更的<b>变更前</b>配置快照。
+     *
+     * <p>按资源类型分别取当前权威定义（{@code cap_*_def} / {@code cap_agent_def} 的
+     * 最高版本），组装成与 {@code payload} 同构的 JSON，供变更记录做前后对比。
+     *
+     * <p>⚠️ <b>取不到基线就返回 {@code null}</b>（新建对象、非发布类操作、读取异常）：
+     * 不臆造空对象 —— 前端据此区分「无基线（首个版本）」与「基线是空配置」。
+     *
+     * <p>⚠️ <b>读取异常不得让申请失败</b>：快照是「辅助证据」，
+     * 取不到只是对比时缺基线，不该阻断变更本身；但必须记日志留痕。
+     */
+    private @Nullable String snapshotBefore(@NonNull ConfigPublishPayload payload) {
+        try {
+            Map<String, Object> snapshot = new LinkedHashMap<>();
+
+            if (!payload.agents().isEmpty() && agentDefs != null) {
+                List<Map<String, Object>> agents = new ArrayList<>();
+                for (ConfigPublishPayload.AgentSpec spec : payload.agents()) {
+                    agentDefs.findLatestGlobal(spec.agentId())
+                            .ifPresent(def -> agents.add(agentToMap(def)));
+                }
+                if (!agents.isEmpty()) {
+                    snapshot.put("agents", agents);
+                }
+            }
+            if (!payload.tools().isEmpty()) {
+                List<Map<String, Object>> tools = new ArrayList<>();
+                for (ConfigPublishPayload.ToolSpec spec : payload.tools()) {
+                    toolDefs.findLatest(spec.toolId()).ifPresent(def -> tools.add(toolToMap(def)));
+                }
+                if (!tools.isEmpty()) {
+                    snapshot.put("tools", tools);
+                }
+            }
+            if (!payload.skills().isEmpty()) {
+                List<Map<String, Object>> skills = new ArrayList<>();
+                for (ConfigPublishPayload.SkillSpec spec : payload.skills()) {
+                    skillDefs.findLatest(spec.skillId()).ifPresent(def -> skills.add(skillToMap(def)));
+                }
+                if (!skills.isEmpty()) {
+                    snapshot.put("skills", skills);
+                }
+            }
+            if (!payload.mcpServers().isEmpty()) {
+                List<Map<String, Object>> servers = new ArrayList<>();
+                for (ConfigPublishPayload.McpServerSpec spec : payload.mcpServers()) {
+                    serverDefs.findLatest(spec.serverId()).ifPresent(def -> servers.add(serverToMap(def)));
+                }
+                if (!servers.isEmpty()) {
+                    snapshot.put("mcpServers", servers);
+                }
+            }
+
+            if (snapshot.isEmpty()) {
+                return null;
+            }
+            return SNAPSHOT_MAPPER.writeValueAsString(snapshot);
+        } catch (RuntimeException e) {
+            // 快照是辅助证据：取不到只影响对比，不该阻断变更本身。
+            log.warn("计算变更前配置快照失败（不影响本次申请）：operation={}", payload.operation(), e);
+            return null;
+        }
+    }
+
+    private static Map<String, Object> agentToMap(@NonNull CapAgentDef def) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("agentId", def.agentId());
+        m.put("version", def.version());
+        m.put("name", def.name());
+        m.put("description", def.description());
+        m.put("roles", def.roles());
+        m.put("enabledSkills", def.enabledSkills());
+        m.put("skillBundles", def.skillBundles());
+        m.put("capabilityTags", def.capabilityTags());
+        m.put("overrides", def.overrides());
+        m.put("orchestration", def.orchestration());
+        m.put("instructions", def.instructions());
+        m.put("modelRef", def.modelRef());
+        m.put("generationParams", def.generationParams());
+        return m;
+    }
+
+    private static Map<String, Object> toolToMap(@NonNull CapToolDef def) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("toolId", def.id());
+        m.put("version", def.version());
+        m.put("name", def.name());
+        m.put("kind", def.kind().name());
+        m.put("riskLevel", def.riskLevel().name());
+        m.put("mcpServerId", def.mcpServerId());
+        m.put("mcpToolName", def.mcpToolName());
+        m.put("inputSchema", def.inputSchema());
+        m.put("paramPolicies", def.paramPolicies());
+        m.put("description", def.description());
+        return m;
+    }
+
+    private static Map<String, Object> skillToMap(@NonNull CapSkillDef def) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("skillId", def.id());
+        m.put("version", def.version());
+        m.put("name", def.name());
+        m.put("declaredTools", def.declaredTools());
+        m.put("riskCeiling", def.riskCeiling().name());
+        m.put("paramPolicies", def.paramPolicies());
+        m.put("requiredCaps", def.requiredCaps());
+        return m;
+    }
+
+    private static Map<String, Object> serverToMap(@NonNull CapMcpServerDef def) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("serverId", def.id());
+        m.put("version", def.version());
+        m.put("transport", def.transport().name());
+        m.put("endpoint", def.endpoint());
+        m.put("authKind", def.authKind().name());
+        m.put("trustTier", def.trustTier().name());
+        m.put("exposedToolAllowlist", def.exposedToolAllowlist());
+        m.put("connectionRisk", def.connectionRisk().name());
+        return m;
     }
 
     /**
