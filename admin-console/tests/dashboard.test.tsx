@@ -146,5 +146,8 @@ describe('DashboardPage · 运行健康卡片（P4 回填）', () => {
     // 不可用时不渲染「正常 / 降级」状态结论
     expect(screen.queryByText('正常')).toBeNull()
     expect(screen.queryByText('降级')).toBeNull()
+    // ⛔ 指向不存在的 /monitoring 会落 404；两个入口必须直连真实子页
+    expect(screen.getByRole('link', { name: '运行监控' }).getAttribute('href')).toBe('/monitoring/health')
+    expect(screen.getByRole('link', { name: '查看全部' }).getAttribute('href')).toBe('/monitoring/denies')
   })
 })

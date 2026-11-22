@@ -21,6 +21,7 @@ import {
   InputNumber,
   List,
   Modal,
+  Popconfirm,
   Row,
   Space,
   Switch,
@@ -346,7 +347,17 @@ export function DictionaryAdminPage(): JSX.Element {
               extra={
                 <Space>
                   <Text type="secondary">启用</Text>
-                  <Switch checked={current.enabled} onChange={toggleDictEnabled} />
+                  <Popconfirm
+                    title={current.enabled ? '确认停用该字典？' : '确认启用该字典？'}
+                    description={current.enabled
+                      ? '停用后所有引用该字典的前端下拉将不再展示其取值；历史数据取值不受影响。'
+                      : '启用后该字典的取值会重新出现在前端下拉中。'}
+                    okText="确认"
+                    cancelText="取消"
+                    onConfirm={() => void toggleDictEnabled(!current.enabled)}
+                  >
+                    <Switch checked={current.enabled} />
+                  </Popconfirm>
                   <Button
                     size="small"
                     type="primary"

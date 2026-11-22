@@ -16,7 +16,7 @@ import {
   Typography,
 } from 'antd'
 import type { TableColumnsType } from 'antd'
-import { PlusOutlined, SearchOutlined, ToolOutlined } from '@ant-design/icons'
+import { EditOutlined, PlusOutlined, SearchOutlined, ToolOutlined } from '@ant-design/icons'
 import { getConsoleToolCatalog } from '@/api/adminApi'
 import type { ToolCatalogItem } from '@/api/types'
 import {
@@ -54,6 +54,13 @@ export function ToolCatalogPage(): JSX.Element {
   // ⚠️ 双击详情的「开合 + 看哪一条」都是本页状态：抽屉在列表上方开合，
   //    关闭后列表不卸载、不重新请求（详情另有单条 + 关系两个请求，见抽屉组件）。
   const [detailId, setDetailId] = useState<string | null>(null)
+  // ⚠️ 改版：与 Skill 目录对齐——用同一套登记弹窗预填既有定义（toolId 只读），
+  //    而不是只靠「详情页修改」。目录宣称支持改版却没有行内入口，等于能力不可达。
+  const [reviseRow, setReviseRow] = useState<ToolCatalogItem | null>(null)
+  const reviseValues = useMemo(
+    () => (reviseRow ? toolToFormValues(reviseRow) : undefined),
+    [reviseRow],
+  )
   // ⚠️ 本地搜索（不触网）：按 toolId / 名称 / 类型过滤。
   const [search, setSearch] = useState('')
 
@@ -121,13 +128,16 @@ export function ToolCatalogPage(): JSX.Element {
       title: '操作',
       key: 'actions',
       fixed: 'right',
-      width: 90,
-      // ⚠️ 「详情」与「停用」都在行内点：双击行同样可开详情（等价入口；
+      width: 168,
+      // ⚠️ 「详情」「改版」与「停用」都在行内点：双击行同样可开详情（等价入口；
       //    表格列多，双击是最顺手的取出方式）。
       render: (_: unknown, r: ToolCatalogItem) => (
         <Space size="small">
           <Button size="small" onClick={() => setDetailId(r.toolId)}>
             详情
+          </Button>
+          <Button size="small" icon={<EditOutlined />} onClick={() => setReviseRow(r)}>
+            改版
           </Button>
           {r.lifecycleState === 'PUBLISHED' ? (
             <Button size="small" onClick={() => setDeprecateTarget({ toolId: r.toolId, version: r.version })}>
@@ -244,6 +254,34 @@ export function ToolCatalogPage(): JSX.Element {
         {detailId !== null ? <ToolCatalogDetail id={detailId} /> : null}
       </CatalogDetailDrawer>
 
+      {/* ⚠️ 改版：复用同一套登记弹窗，预填既有定义（toolId 只读）。 */}
+      <PlatformRegistrationModal<ToolFormValues & { reason: string; expectedPublishSeq?: number }>
+        open={reviseRow !== null}
+        title={reviseRow ? `改版 Tool · ${reviseRow.toolId}（申请 → 审批 → 执行）` : '改版 Tool'}
+        initialValues={reviseValues}
+        onClose={() => setReviseRow(null)}
+        buildRequest={buildToolPublishRequest}
+        renderFields={() => (
+          <>
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="改版：基于下方预填的既有定义提交新版本"
+              description="toolId 不可改（改标识等于登记另一个对象）。提交后走三步工作流，审批执行后指针移向新版本；既有版本保留为历史。"
+            />
+            <ToolFormFields isRegistration={false} />
+            <Form.Item
+              name="expectedPublishSeq"
+              label="发布基线（expectedPublishSeq · 可选）"
+              extra="填入你读到的当前发布序号；不一致时后端 409（防止覆盖别人改过的配置）"
+            >
+              <InputNumber min={0} precision={0} style={{ width: 200 }} />
+            </Form.Item>
+          </>
+        )}
+      />
+
       <PlatformRegistrationModal<ToolFormValues & { reason: string; expectedPublishSeq?: number }>
         open={registration.open}
         title="登记 Tool（申请 → 审批 → 执行）"
@@ -264,6 +302,23 @@ export function ToolCatalogPage(): JSX.Element {
       />
     </div>
   )
+}
+
+/** 把目录项映射回登记表单取值（改版预填用；与 Skill 目录同口径）。 */
+function toolToFormValues(item: ToolCatalogItem): Partial<ToolFormValues> {
+  return {
+    toolId: item.toolId,
+    name: item.name ?? undefined,
+    kind: item.kind as ToolFormValues['kind'],
+    riskLevel: item.riskLevel as ToolFormValues['riskLevel'],
+    mcpServerId: item.mcpServerId ?? undefined,
+    mcpToolName: item.mcpToolName ?? undefined,
+    httpMethod: item.httpMethod ?? undefined,
+    httpUrl: item.httpUrl ?? undefined,
+    httpTimeoutMs: item.httpTimeoutMs ?? undefined,
+    inputSchema: item.inputSchema,
+    paramPolicies: item.paramPolicies,
+  }
 }
 
 export default ToolCatalogPage

@@ -6,7 +6,7 @@
 
 import { useEffect } from 'react'
 
-const SUFFIX = 'Agent 管理控制台'
+const SUFFIX = '平台控制台'
 
 export function usePageTitle(title: string): void {
   useEffect(() => {

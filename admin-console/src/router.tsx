@@ -18,6 +18,7 @@ import { SkillCatalogPage } from '@/pages/console/SkillCatalogPage'
 import { McpCatalogPage } from '@/pages/console/McpCatalogPage'
 import { RoutingPolicyPage } from '@/pages/catalog/RoutingPolicyPage'
 import { RagManagementPage } from '@/pages/rag/RagManagementPage'
+import { RagWorkbenchPage } from '@/pages/rag/RagWorkbenchPage'
 import { RagDashboardPage } from '@/pages/rag/RagDashboardPage'
 import { RagSourceRegisterPage } from '@/pages/rag/RagSourceRegisterPage'
 import { RagSourceListPage } from '@/pages/rag/RagSourceListPage'
@@ -34,6 +35,8 @@ import { RagReindexPage } from '@/pages/rag/RagReindexPage'
 import { DictionaryAdminPage } from '@/pages/dictionaries/DictionaryAdminPage'
 import { ModelCatalogPage } from '@/pages/models/ModelCatalogPage'
 import { ChatAuditConfigPage } from '@/pages/settings/ChatAuditConfigPage'
+import { ConfigCenterPage } from '@/pages/settings/ConfigCenterPage'
+import { ConfigCredentialsPage } from '@/pages/settings/ConfigCredentialsPage'
 import { AgentLabPage } from '@/pages/agentlab/AgentLabPage'
 import { AiChatPage } from '@/pages/agentlab/AiChatPage'
 import { AgentChatPage } from '@/pages/agentlab/AgentChatPage'
@@ -114,7 +117,11 @@ export const router = createBrowserRouter(
         },
         {
           path: 'tenants',
-          element: <TenantRegistryPage />,
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <TenantRegistryPage />
+            </RequireRole>
+          ),
         },
         {
           // 深链 /tenants/new 不是第二个表单宿主：跳回租户页并带 ?register=1，
@@ -190,7 +197,30 @@ export const router = createBrowserRouter(
           ),
         },
         {
-          // 路由策略登记 + 试跑（dry-run 走后端同一引擎；端点属租户域，见页面诚实边界）
+          // 配置管理总览：只做入口索引与参数口径说明，不在两处复制写入表单。
+          path: 'config',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <ConfigCenterPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 凭据引用只读视图（旧 /settings 配置中心页签已独立成页）：保留可深链路径。
+          path: 'config/credentials',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <ConfigCredentialsPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 旧书签兼容：/settings 统一跳到配置总览，不再维持第二个配置入口。
+          path: 'settings',
+          element: <Navigate to="/config" replace />,
+        },
+        {
+          // 路由策略（导航归「配置管理 · 策略与审计」）
           path: 'routing-policies',
           element: (
             <RequireRole roles={PLATFORM_SCOPE_ROLES}>
@@ -217,13 +247,19 @@ export const router = createBrowserRouter(
           ),
         },
         {
-          // RAG 语料治理：单页 → 四治理域 13 页（RAG-D13 / RAG-D14）
-          //
-          // ⚠️ 改造前是一个 /rag 页挂 5 个 Tab（RAG-D12 靶点 G：治理面过重）。
-          //    现按「录入与校对 / 审核 / 规则配置 / 运维」四个域拆成独立路由，
-          //    每页只承担一件事，导航分区见 navConfig。
-          // ⚠️ 旧的 /rag 单页保留为入口跳转，避免既有书签 404。
+          // RAG 工作台：一个分组 + 四治理域 section（2026-11-22 收口）。
+          // ⚠️ /rag 现在是**索引页**，页面清单由 navConfig 的 section 派生；
+          //    旧五 Tab 单页移至 /rag/legacy，仅作兼容路由、不进侧栏。
           path: 'rag',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <RagWorkbenchPage />
+            </RequireRole>
+          ),
+        },
+        {
+          // 旧 /rag 单页（五 Tab）：保留能力，不再占用主入口。
+          path: 'rag/legacy',
           element: (
             <RequireRole roles={PLATFORM_SCOPE_ROLES}>
               <RagManagementPage />
@@ -416,19 +452,53 @@ export const router = createBrowserRouter(
             </RequireRole>
           ),
         },
-        // O7：孤儿页面接入（导航见 navConfig「运维观测与发布」分组）。
-        { path: 'dependencies/graph', element: <DependencyGraphPage /> },
-        { path: 'dependencies/impact', element: <ImpactAnalysisPage /> },
-        { path: 'dependencies/delegations', element: <DelegationTopologyPage /> },
-        { path: 'publish', element: <PublishCenterPage /> },
-        { path: 'publish/releases', element: <PublishReleasesPage /> },
-        { path: 'publish/policies', element: <PolicyConfigPage /> },
-        { path: 'publish/drafts', element: <DraftListPage /> },
-        { path: 'publish/failures', element: <PublishFailuresPage /> },
-        { path: 'publish/versions', element: <VersionHistoryPage /> },
-        { path: 'audit/business', element: <BusinessAuditLogPage /> },
-        { path: 'monitoring/health', element: <MonitoringHealthPage /> },
-        { path: 'monitoring/denies', element: <MonitoringDeniesPage /> },
+        // O7：运维/发布页面接入；深链门禁与 navConfig.requiredRoles 同源，
+        //    菜单隐藏不代表深链可进（后端口令仍会二次授权，但 UI 声明不能分家）。
+        { path: 'dependencies/graph', element: (
+          <RequireRole roles={PLATFORM_SCOPE_ROLES}><DependencyGraphPage /></RequireRole>
+        ) },
+        { path: 'dependencies/impact', element: (
+          <RequireRole roles={PLATFORM_SCOPE_ROLES}><ImpactAnalysisPage /></RequireRole>
+        ) },
+        { path: 'dependencies/delegations', element: (
+          <RequireRole roles={PLATFORM_SCOPE_ROLES}><DelegationTopologyPage /></RequireRole>
+        ) },
+        { path: 'publish', element: (
+          <RequireRole roles={PLATFORM_SCOPE_ROLES}><PublishCenterPage /></RequireRole>
+        ) },
+        { path: 'publish/releases', element: (
+          <RequireRole roles={PLATFORM_SCOPE_ROLES}><PublishReleasesPage /></RequireRole>
+        ) },
+        { path: 'publish/policies', element: (
+          <RequireRole roles={PLATFORM_SCOPE_ROLES}><PolicyConfigPage /></RequireRole>
+        ) }, // 导航归「运维观测与发布 · 发布策略」
+        { path: 'publish/drafts', element: (
+          <RequireRole roles={PLATFORM_SCOPE_ROLES}><DraftListPage /></RequireRole>
+        ) },
+        { path: 'publish/failures', element: (
+          <RequireRole roles={PLATFORM_SCOPE_ROLES}><PublishFailuresPage /></RequireRole>
+        ) },
+        { path: 'publish/versions', element: (
+          <RequireRole roles={PLATFORM_SCOPE_ROLES}><VersionHistoryPage /></RequireRole>
+        ) },
+        { path: 'audit/business', element: (
+          <RequireRole roles={AUDIT_SCOPE}><BusinessAuditLogPage /></RequireRole>
+        ) },
+        {
+          // 运行监控索引：直达健康快照；侧栏高亮由 /monitoring 节点承担。
+          path: 'monitoring',
+          element: (
+            <RequireRole roles={PLATFORM_SCOPE_ROLES}>
+              <Navigate to="/monitoring/health" replace />
+            </RequireRole>
+          ),
+        },
+        { path: 'monitoring/health', element: (
+          <RequireRole roles={PLATFORM_SCOPE_ROLES}><MonitoringHealthPage /></RequireRole>
+        ) },
+        { path: 'monitoring/denies', element: (
+          <RequireRole roles={PLATFORM_SCOPE_ROLES}><MonitoringDeniesPage /></RequireRole>
+        ) },
         {
           // 404 兜底（评审 §1.2 P0）：未知路径不再白屏，给真实去向
           path: '*',

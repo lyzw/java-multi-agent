@@ -73,44 +73,27 @@ server {
 
 后台的旧租户链端点（`/api/cap/*`、`/api/admin/*`）对平台令牌不可达；原租户域页面文件暂留仓库但已不在路由中。
 
-### 3.1 完整可达页面清单（本轮 E2E 实测 30 页，与 navConfig.tsx 一致）
+### 3.1 页面分组（唯一来源：`src/layout/navConfig.tsx`）
 
-> 上方 8 行是核心读写入口的端点明细；下方为全部 30 个可达页面的分组与路由盘点（2026-11-13 实测，详见 E2E 报告 §2.3）。
+> 页面清单不再在文档里维护第二份逐项表格：分组、`section`、路径、标题、图标都由 `NAV_GROUPS` 派生。
+> 侧栏、面包屑、`/config` 索引、`/rag` 工作台以及本表口径一致；改路由只需改导航一处。
 
-| 分组 | 页面 | 路由 |
+| 顶级分组 | section | 主要路由 |
 |---|---|---|
-| 平台治理 | 租户管理 | /tenants |
-| 平台治理 | 平台用户 | /users |
-| 平台治理 | 角色权限矩阵 | /roles |
-| 平台治理 | 平台审计 | /audit |
-| 能力目录 | Agent 注册表 | /agents |
-| 能力目录 | Tool | /tools |
-| 能力目录 | Skill | /skills |
-| 能力目录 | MCP Server | /mcps |
-| 能力目录 | 路由策略 | /routing-policies |
-| RAG · 录入与校对 | Dashboard 总览 | /rag/dashboard |
-| RAG · 录入与校对 | 来源登记 | /rag/sources/new |
-| RAG · 录入与校对 | 来源列表 | /rag/sources |
-| RAG · 录入与校对 | 载体上传与解析预览 | /rag/doc-upload |
-| RAG · 录入与校对 | 片段校对 | /rag/chunk-fix |
-| RAG · 审核 | 校验决定 | /rag/verify |
-| RAG · 审核 | 抽检队列 | /rag/inspection |
-| RAG · 审核 | 召回解释（质检） | /rag/recall |
-| RAG · 规则配置 | 审核员名录 | /rag/reviewers |
-| RAG · 规则配置 | 知识点别名 | /rag/kp-alias |
-| RAG · 规则配置 | 字典 | /rag/dictionaries |
-| RAG · 运维 | 摄取任务 | /rag/jobs |
-| RAG · 运维 | 重索引 | /rag/reindex |
-| 系统配置 | 字典配置 | /dictionaries |
-| 系统配置 | 模型配置 | /model-catalog |
-| 观测度量 | Agent 效果指标 | /metrics |
-| 观测度量 | 效果数据录入 | /metrics-entry |
-| 观测度量 | 人工审查队列 | /review-queue |
-| AI 实验室 | Agent 效果测试 | /agent-lab |
-| AI 实验室 | AI 对话 | /ai-chat |
-| AI 实验室 | Agent 编排对话 | /agent-chat |
+| 概览 | — | `/dashboard` |
+| 平台治理 | — | `/tenants`、`/users`、`/roles` |
+| 审计中心 | 审计记录 | `/audit`、`/chat-audit-records`、`/audit/business`（三者共用 AUDIT_SCOPE） |
+| 能力目录 | — | `/agents`、`/tools`、`/skills`、`/mcps` |
+| RAG 工作台 | 总览 / 录入与校对 / 审核 / 规则配置 / 运维 | `/rag` 及 `/rag/*` |
+| 配置管理 · 基础 | — | `/config`、`/dictionaries`、`/model-catalog`、`/config/credentials` |
+| 配置管理 · 策略与审计 | — | `/routing-policies`、`/chat-audit-config` |
+| 观测度量 | — | `/metrics`、`/metrics-entry`、`/review-queue` |
+| 运维观测与发布 | 依赖关系 / 发布策略 / 发布执行 / 运行监控 | `/dependencies/*`、`/publish/*`、`/monitoring` |
+| AI 实验室 | — | `/agent-lab`、`/ai-chat`、`/agent-chat` |
 
-> **文档口径说明（2026-11-13）**：本 README 随本轮实测刷新了导航表（DOC-01）、权限数（DOC-07）、审计角色门禁（DEF-02 修复对应）。其余受控架构文档的同步——设计方案未挂载页面（DOC-02）、作用域红线变更（DOC-04）、重规划 §10 菜单模块（DOC-05）/ §5.3 角色目录（DOC-06）/ 禁区边界（DOC-08）——需随架构评审与安全评审（DOC-08 待签字）逐项确认，差异明细与判定见 E2E 报告 §4 与 §9.2。
+兼容路由：`/rag/legacy`（旧五 Tab 单页，不进侧栏）、`/settings` → `/config`（重定向）。`_base` 为 `/admin`。
+
+> **文档口径说明（2026-11-22）**：本表已按配置管理收口（两组）、RAG 单分组、审计三页合并、发布策略归位、监控索引补链同步更新。其余受控架构文档的同步——设计方案未挂载页面（DOC-02）、作用域红线变更（DOC-04）、重规划 §10 菜单模块（DOC-05）/ §5.3 角色目录（DOC-06）/ 禁区边界（DOC-08）——需随架构评审与安全评审（DOC-08 待签字）逐项确认，差异明细与判定见 E2E 报告 §4 与 §9.2。
 
 ---
 

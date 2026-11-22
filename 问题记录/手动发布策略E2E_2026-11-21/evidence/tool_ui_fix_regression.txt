@@ -1,0 +1,7 @@
+=== 2026-11-21T15:28:07Z Tool 登记 UI 修复后真实提交（手动执行前） ===
+b6ed19cd-85ce-4b65-b046-f9459f2280fd|PLATFORM|APPROVED|[发布策略自动放行] mode=MANUAL; policyLevel=GLOBAL; policyId=a1945d9a-01d0-47a6-8129-ecbbd645369b; fromGlobalFallback=true|NULL|2026-11-21 23:27:52.10522+08
+-- pointer --
+PLATFORM|1994|1968
+TENANT:8394ad1e-5cb2-4d51-a0bb-2ee2e38b5751|1992|1966
+-- release count --
+29|1994

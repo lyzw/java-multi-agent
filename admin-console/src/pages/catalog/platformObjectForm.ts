@@ -128,6 +128,12 @@ export function buildToolSpec(values: ToolFormValues): SpecResult<{
 }> {
   const toolId = (values.toolId ?? '').trim()
   if (toolId === '') return { ok: false, error: '请输入 Tool 标识' }
+  // ⚠️ kind 缺失时**不能**悄悄当 NATIVE：spec.kind=undefined 会被 JSON.stringify
+  //    整字段丢掉，后端 400「请求参数不合法」，而作者看不到任何缺失字段。
+  //    表单侧已给隐藏字段 initialValue=NATIVE；这里再守一道（E2E 2026-11-21）。
+  if (values.kind !== 'NATIVE' && values.kind !== 'MCP' && values.kind !== 'HTTP') {
+    return { ok: false, error: 'Tool 类型（kind）缺失或不合法：请选择内置 / MCP / HTTP' }
+  }
   if (!values.riskLevel) return { ok: false, error: '请选择风险等级' }
 
   const serverId = (values.mcpServerId ?? '').trim()

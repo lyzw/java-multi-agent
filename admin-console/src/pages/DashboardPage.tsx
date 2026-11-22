@@ -277,7 +277,7 @@ export function DashboardPage(): JSX.Element {
           description={
             <span>
               运行监控数据源当前不可达，后端刻意返回 503 而非空快照。
-              「看不到」不等于「一切正常」——请到 <Link to="/monitoring">运行监控</Link> 页确认是否需要人工对账。
+              「看不到」不等于「一切正常」——请到 <Link to="/monitoring/health">运行监控</Link> 页确认是否需要人工对账。
             </span>
           }
         />
@@ -394,7 +394,7 @@ export function DashboardPage(): JSX.Element {
               近期拒绝
               <small>逐条下钻请到拒绝告警页</small>
             </div>
-            <Link to="/monitoring" className="dc-panel__meta" style={{ color: 'var(--dc-brass-deep)' }}>
+            <Link to="/monitoring/denies" className="dc-panel__meta" style={{ color: 'var(--dc-brass-deep)' }}>
               查看全部
             </Link>
           </div>

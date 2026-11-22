@@ -7,7 +7,7 @@ import {
   LogoutOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { NAV_GROUPS, findNavNode } from '@/layout/navConfig'
+import { NAV_GROUPS, findNavNode, type NavNode } from '@/layout/navConfig'
 import { Breadcrumb } from '@/layout/Breadcrumb'
 import { useSession } from '@/auth/session'
 import { clearSession } from '@/auth/tokenStorage'
@@ -27,6 +27,29 @@ function BrandMark(): JSX.Element {
       <circle cx="13" cy="13" r="1" fill="#A9761B" />
     </svg>
   )
+}
+
+/**
+ * 叶子项 → AntD 菜单项。带 `section` 的分组（当前仅 RAG 工作台）渲染成
+ * 一级 SubMenu 内的 `type: 'group'` 小标题，避免 RAG 再占四个顶级入口。
+ */
+function toMenuChildren(nodes: NavNode[]): NonNullable<MenuProps['items']> {
+  const leaf = (n: NavNode): NonNullable<MenuProps['items']>[number] => ({
+    key: n.path,
+    icon: n.icon,
+    label: n.label,
+  })
+  const plain = nodes.filter((n) => !n.section)
+  const sections = [...new Set(nodes.map((n) => n.section).filter((s): s is string => !!s))]
+  if (sections.length === 0) return plain.map(leaf)
+  return [
+    ...plain.map(leaf),
+    ...sections.map((section) => ({
+      type: 'group' as const,
+      label: section,
+      children: nodes.filter((n) => n.section === section).map(leaf),
+    })),
+  ]
 }
 
 export function AdminLayout(): JSX.Element {
@@ -71,7 +94,7 @@ export function AdminLayout(): JSX.Element {
     () => (matched ? visibleGroups.find((g) => g.children.some((n) => n.key === matched.key)) : undefined),
     [matched, visibleGroups],
   )
-  const pageTitle = matched?.label ?? '平台管理控制台'
+  const pageTitle = matched?.label ?? '平台控制台'
   usePageTitle(pageTitle)
 
   /**
@@ -99,11 +122,7 @@ export function AdminLayout(): JSX.Element {
             <span className="dc-group-count">{g.children.length}</span>
           </span>
         ),
-        children: g.children.map((n) => ({
-          key: n.path,
-          icon: n.icon,
-          label: n.label,
-        })),
+        children: toMenuChildren(g.children),
       })),
     [visibleGroups],
   )

@@ -112,6 +112,12 @@ describe('Tool spec · kind 与 MCP 绑定字段成对互斥', () => {
     riskLevel: 'READ',
   }
 
+  it('⛔ kind 缺失 → 当场拒（不得让 spec 丢掉 kind 字段后送出去吃 400）', () => {
+    const r = buildToolSpec({ toolId: 'tool-1', riskLevel: 'READ' } as ToolFormValues)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('kind')
+  })
+
   it('kind=MCP 且两项都给 → 通过，两项都进 spec', () => {
     const r = buildToolSpec({ ...base, mcpServerId: 'srv-1', mcpToolName: 'query' })
     expect(r.ok).toBe(true)

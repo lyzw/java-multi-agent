@@ -1,3 +1,7 @@
+/**
+ * @deprecated 运行期不可达：结果契约展示已并入 console 目录详情。
+ * 本文件仅被旧版回归测试引用，禁止在新页面/路由中 import。
+ */
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {

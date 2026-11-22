@@ -26,6 +26,9 @@ import {
 } from '@ant-design/icons'
 import { PLATFORM_SCOPE_ROLES, ROLES, type Role } from '@/config/constants'
 
+/** 审计域角色口径：与 router AUDIT_SCOPE、后端 platform.audit.read 三处一致。 */
+const AUDIT_SCOPE: Role[] = [ROLES.SUPER_ADMIN, ROLES.SECURITY_ADMIN, ROLES.AUDITOR]
+
 export interface NavNode {
   key: string
   label: string
@@ -35,6 +38,11 @@ export interface NavNode {
   description: string
   /** 所属分组标签（由 NAV_GROUPS 派生，供仪表盘等只读消费） */
   phase: string
+  /**
+   * 组内小标题（可选）。RAG 工作台把四个治理域收在一个顶级分组下，
+   * 用 section 在菜单与总览页之间共享同一份分组口径；不传则叶子平铺。
+   */
+  section?: string
 }
 
 export interface NavGroup {
@@ -113,27 +121,49 @@ export const NAV_GROUPS: NavGroup[] = [
           '6 个最小特权角色的冻结权限矩阵（代码冻结，运行期不可改），按命名空间分组只读呈现，含中文释义。角色赋权走「平台用户」页或带外运维通道。',
         phase: '平台治理',
       },
+    ],
+  },
+  {
+    // 审计三页收口：此前「平台审计 / 对话审计记录」在平台治理、「业务审计日志」在运维组，
+    // 角色口径也一度分家（PLATFORM_SCOPE_ROLES vs AUDIT_SCOPE）。统一到单一审计域。
+    key: 'audit-center',
+    label: '审计中心',
+    icon: <FileProtectOutlined />,
+    requiredRoles: AUDIT_SCOPE,
+    children: [
       {
         key: 'audit',
         label: '平台审计',
         path: '/audit',
         icon: <FileProtectOutlined />,
         // DEF-02：与 router AUDIT_SCOPE、后端冻结矩阵保持一致（SECURITY_ADMIN 持 audit.read）。
-        requiredRoles: [ROLES.SUPER_ADMIN, ROLES.SECURITY_ADMIN, ROLES.AUDITOR],
+        requiredRoles: AUDIT_SCOPE,
         description:
           '平台管理动作审计（登录/租户生命周期/配额/能力授权/用户管理），读 platform_audit_event，与租户业务审计物理分域。仅追加、只读。',
-        phase: '平台治理',
+        phase: '审计中心',
+        section: '审计记录',
       },
       {
         key: 'chat-audit-records',
         label: '对话审计记录',
         path: '/chat-audit-records',
         icon: <FileProtectOutlined />,
-        // 与 router AUDIT_SCOPE、后端 platform.audit.read 一致（DEF-02 三处口径统一）。
-        requiredRoles: [ROLES.SUPER_ADMIN, ROLES.SECURITY_ADMIN, ROLES.AUDITOR],
+        requiredRoles: AUDIT_SCOPE,
         description:
           '对话审计插件录制结果（跨租户只读）：还原每次聊天请求的完整信封——用户问题、回答、thinking、逐分片、RAG 命中、工具调用、终态；含建连前失败（仅元数据）。列表只取摘要，点行按需加载原文。需 platform.audit.read。',
-        phase: '平台治理',
+        phase: '审计中心',
+        section: '审计记录',
+      },
+      {
+        key: 'audit-business',
+        label: '业务审计日志',
+        path: '/audit/business',
+        icon: <FileTextOutlined />,
+        // 与平台审计同源：资产配置级事件同样需要 platform.audit.read。
+        requiredRoles: AUDIT_SCOPE,
+        description: '资产配置级业务审计：CREATE / SAVE_DRAFT / PUBLISH_SUCCESS / ROLLBACK 等全量事件，含 before/after JSON 快照 + diff。',
+        phase: '审计中心',
+        section: '审计记录',
       },
     ],
   },
@@ -183,6 +213,228 @@ export const NAV_GROUPS: NavGroup[] = [
           '平台级 MCP Server 目录，发布按策略分流。凭据定位符从不回显，重发必须显式重新填写（fail-closed）。',
         phase: '能力目录',
       },
+    ],
+  },
+  // ------------------------------------------------------------------
+  // RAG 工作台 · 单一入口（2026-11-22）
+  //
+  // ⚠️ 改造前 RAG 在侧栏占四个顶级分组（录入与校对 / 审核 / 规则配置 / 运维），
+  //    再加旧 /rag 五 Tab 单页与配置中心里的 RAG 索引，用户很难判断
+  //    「同一个语料问题该进哪个分区」。现收口为一个顶级分组，组内用 section
+  //    区分四个治理域；每个路径仍只有一个菜单入口。
+  //
+  // ⚠️ 工作台总览页（/rag）的卡片列表由本分组的 section 派生，
+  //    所以菜单与总览页不会各写一份路径清单而漂移。
+  // ------------------------------------------------------------------
+  {
+    key: 'rag-workbench',
+    label: 'RAG 工作台',
+    icon: <AppstoreOutlined />,
+    requiredRoles: PLATFORM_SCOPE_ROLES,
+    children: [
+      {
+        key: 'rag-home',
+        label: '工作台总览',
+        path: '/rag',
+        icon: <AppstoreOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: 'RAG 页面唯一入口：按治理域索引全部页面，并说明作用域与治理票据的统一口径。',
+        phase: 'RAG 工作台',
+        section: '总览',
+      },
+      {
+        key: 'rag-dashboard',
+        label: 'Dashboard 总览',
+        path: '/rag/dashboard',
+        icon: <AppstoreOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '三面健康度一览：写面入库 · 读面检索 · 治理面审核，按角色给出下一步。',
+        phase: 'RAG 工作台',
+        section: '总览',
+      },
+      {
+        key: 'rag-source-new',
+        label: '来源登记',
+        path: '/rag/sources/new',
+        icon: <FileProtectOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '登记来源（作品级）：版本五轴、权威等级与版权状态，五轴缺一不可入库。',
+        phase: 'RAG 工作台',
+        section: '录入与校对',
+      },
+      {
+        key: 'rag-source-list',
+        label: '来源列表',
+        path: '/rag/sources',
+        icon: <FileSearchOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '浏览与筛选全部来源，快速定位治理状态与生命周期。',
+        phase: 'RAG 工作台',
+        section: '录入与校对',
+      },
+      {
+        key: 'rag-doc-upload',
+        label: '载体上传与解析预览',
+        path: '/rag/doc-upload',
+        icon: <ThunderboltOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '上传载体后先看解析结果（切片/角色着色/页码），确认再入库——切分错误会直接导致泄题。',
+        phase: 'RAG 工作台',
+        section: '录入与校对',
+      },
+      {
+        key: 'rag-chunk-fix',
+        label: '片段校对',
+        path: '/rag/chunk-fix',
+        icon: <FileProtectOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '人工纠正片段角色，重点处理疑似答案区误判（判成讲解会直接泄题）。',
+        phase: 'RAG 工作台',
+        section: '录入与校对',
+      },
+      {
+        key: 'rag-verify',
+        label: '校验决定',
+        path: '/rag/verify',
+        icon: <FileProtectOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: 'VERIFIED / REVOKED 决定；VERIFIED 须证据并双人复核，REVOKED 须填原因。',
+        phase: 'RAG 工作台',
+        section: '审核',
+      },
+      {
+        key: 'rag-inspection',
+        label: '抽检队列',
+        path: '/rag/inspection',
+        icon: <MergeCellsOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '对疑似片段人工抽检；抽检未通过则来源签不出 VERIFIED（必经关卡）。',
+        phase: 'RAG 工作台',
+        section: '审核',
+      },
+      {
+        key: 'rag-recall',
+        label: '召回解释（质检）',
+        path: '/rag/recall',
+        icon: <LineChartOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '模拟检索：召回什么、为什么、是否触发门禁。学生搜不到时先在这里自查。',
+        phase: 'RAG 工作台',
+        section: '审核',
+      },
+      {
+        key: 'rag-reviewers',
+        label: '审核员名录',
+        path: '/rag/reviewers',
+        icon: <TeamOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '维护审核员与复核权限，显式暴露职责分离（SoD）冲突。',
+        phase: 'RAG 工作台',
+        section: '规则配置',
+      },
+      {
+        key: 'rag-kp-alias',
+        label: '知识点别名',
+        path: '/rag/kp-alias',
+        icon: <BookOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '维护知识点别名，让口语化问法确定性匹配到规范知识点。',
+        phase: 'RAG 工作台',
+        section: '规则配置',
+      },
+      {
+        key: 'rag-dictionaries',
+        label: '字典',
+        path: '/rag/dictionaries',
+        icon: <BookOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '维护治理下拉枚举的数据源；仅「来源类型」可编辑，其余为派生只读。',
+        phase: 'RAG 工作台',
+        section: '规则配置',
+      },
+      {
+        key: 'rag-jobs',
+        label: '摄取任务',
+        path: '/rag/jobs',
+        icon: <ThunderboltOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '入库任务三态 + 单进度条；失败可重试（新建一次尝试，旧尝试留痕）。',
+        phase: 'RAG 工作台',
+        section: '运维',
+      },
+      {
+        key: 'rag-reindex',
+        label: '重索引',
+        path: '/rag/reindex',
+        icon: <DatabaseOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description: '补齐缺失向量 / 重建索引（同步执行）。蓝绿代际切换后端尚未提供。',
+        phase: 'RAG 工作台',
+        section: '运维',
+      },
+    ],
+  },
+  // ------------------------------------------------------------------
+  // 配置管理 · 两组：基础配置 / 策略与审计。
+  // ⚠️ 改造前字典、模型、对话审计在「系统配置」，发布策略在「运维观测与发布」，
+  //    路由策略在「能力目录」——同一类「改参数」动作散在三个分区，用户只能靠猜。
+  //    现统一收口到配置管理；RAG 规则仍留在 RAG 治理域（属于语料工作流），
+  //    由 /config 总览页给出索引，不制造第二份同路径菜单入口。
+  // ------------------------------------------------------------------
+  {
+    key: 'config-foundation',
+    label: '配置管理 · 基础',
+    icon: <ControlOutlined />,
+    requiredRoles: PLATFORM_SCOPE_ROLES,
+    children: [
+      {
+        key: 'config-center',
+        label: '配置总览',
+        path: '/config',
+        icon: <AppstoreOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '配置入口索引与参数填写口径：基础配置、策略与审计、RAG 规则、变更工作流。只做导航，不重复实现任何写入口。',
+        phase: '配置管理 · 基础',
+      },
+      {
+        key: 'dictionaries',
+        label: '字典配置',
+        path: '/dictionaries',
+        icon: <BookOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '把前端下拉枚举收敛到 sys_dictionary / sys_dictionary_item 两表维护：新增、改名、停用无需改前端代码。内置字典禁止物理删除，仅可停用（避免历史数据取值悬空）。',
+        phase: '配置管理 · 基础',
+      },
+      {
+        key: 'model-catalog',
+        label: '模型配置',
+        path: '/model-catalog',
+        icon: <ApiOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '模型配置（Model Catalog）：模型定义 CRUD（供应商 / 场景 / 能力开关 / 维度 / 排序）+ 供应商密钥（仅脱敏回显，明文只上传不回显）。写端点需 PLATFORM_ADMIN，安全边界以执行时后端重授权为准。',
+        phase: '配置管理 · 基础',
+      },
+      {
+        key: 'config-credentials',
+        label: '凭据引用登记',
+        path: '/config/credentials',
+        icon: <FileProtectOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '只读查看各 MCP Server 是否已登记凭据引用。凭据材料与定位符永不入响应；登记与轮换走带外运维通道，应用层不提供写入口。',
+        phase: '配置管理 · 基础',
+      },
+    ],
+  },
+  {
+    key: 'config-policies',
+    label: '配置管理 · 策略与审计',
+    icon: <SettingOutlined />,
+    requiredRoles: PLATFORM_SCOPE_ROLES,
+    children: [
       {
         key: 'routing-policies',
         label: '路由策略',
@@ -194,199 +446,7 @@ export const NAV_GROUPS: NavGroup[] = [
           + '（前端无第二份求值器，故界面结论与运行期一致）。'
           + '⚠️ 端点属租户域（/api/cap/config/**，租户来自验签令牌），平台令牌可能 401/403；'
           + '此时页面明示「需租户级令牌通道」，不会把「没跑成」显示成「没问题」。',
-        phase: '能力目录',
-      },
-    ],
-  },
-  // ------------------------------------------------------------------
-  // RAG 语料管理 · 四治理域分区（RAG-D13 §2.1 / RAG-D14）
-  //
-  // ⚠️ 改造前 RAG 只有 /rag 一个入口，页内挂 5 个 Tab——用户进去不知道先看哪，
-  //    且「审核」「运维」两种完全不同的职责混在同一页（RAG-D12 靶点 G）。
-  //    现按治理域拆成四个分组，每组页面共享同一类角色与同一种操作语气。
-  //
-  // ⚠️ 2026-11-10 E2E 修复：原先「知识与数据」分组下还留着一个改造前的
-  //    「RAG 语料管理」入口，path 同样指向 /rag/dashboard。AdminLayout 用
-  //    n.path 作 Menu key，两个入口 key 撞车 → AntD 打
-  //    "Duplicated key '/rag/dashboard'" 警告且选中态落在非预期分组。
-  //    该入口与下面「RAG · 录入与校对 → Dashboard 总览」完全同路由、零功能差别，
-  //    故删除遗留项而不是造第二个假路由：菜单 key 必须唯一，且每条 path 只有一个入口。
-  // ------------------------------------------------------------------
-  {
-    key: 'rag-ingest',
-    label: 'RAG · 录入与校对',
-    icon: <FileSearchOutlined />,
-    requiredRoles: PLATFORM_SCOPE_ROLES,
-    children: [
-      {
-        key: 'rag-dashboard',
-        label: 'Dashboard 总览',
-        path: '/rag/dashboard',
-        icon: <AppstoreOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '三面健康度一览：写面入库 · 读面检索 · 治理面审核，按角色给出下一步。',
-        phase: 'RAG · 录入与校对',
-      },
-      {
-        key: 'rag-source-new',
-        label: '来源登记',
-        path: '/rag/sources/new',
-        icon: <FileProtectOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '登记来源（作品级）：版本五轴、权威等级与版权状态，五轴缺一不可入库。',
-        phase: 'RAG · 录入与校对',
-      },
-      {
-        key: 'rag-source-list',
-        label: '来源列表',
-        path: '/rag/sources',
-        icon: <FileSearchOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '浏览与筛选全部来源，快速定位治理状态与生命周期。',
-        phase: 'RAG · 录入与校对',
-      },
-      {
-        key: 'rag-doc-upload',
-        label: '载体上传与解析预览',
-        path: '/rag/doc-upload',
-        icon: <ThunderboltOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description:
-          '上传载体后先看解析结果（切片/角色着色/页码），确认再入库——切分错误会直接导致泄题。',
-        phase: 'RAG · 录入与校对',
-      },
-      {
-        key: 'rag-chunk-fix',
-        label: '片段校对',
-        path: '/rag/chunk-fix',
-        icon: <FileProtectOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '人工纠正片段角色，重点处理疑似答案区误判（判成讲解会直接泄题）。',
-        phase: 'RAG · 录入与校对',
-      },
-    ],
-  },
-  {
-    key: 'rag-review',
-    label: 'RAG · 审核',
-    icon: <FileProtectOutlined />,
-    requiredRoles: PLATFORM_SCOPE_ROLES,
-    children: [
-      {
-        key: 'rag-verify',
-        label: '校验决定',
-        path: '/rag/verify',
-        icon: <FileProtectOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: 'VERIFIED / REVOKED 决定；VERIFIED 须证据并双人复核，REVOKED 须填原因。',
-        phase: 'RAG · 审核',
-      },
-      {
-        key: 'rag-inspection',
-        label: '抽检队列',
-        path: '/rag/inspection',
-        icon: <MergeCellsOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '对疑似片段人工抽检；抽检未通过则来源签不出 VERIFIED（必经关卡）。',
-        phase: 'RAG · 审核',
-      },
-      {
-        key: 'rag-recall',
-        label: '召回解释（质检）',
-        path: '/rag/recall',
-        icon: <LineChartOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '模拟检索：召回什么、为什么、是否触发门禁。学生搜不到时先在这里自查。',
-        phase: 'RAG · 审核',
-      },
-    ],
-  },
-  {
-    key: 'rag-rules',
-    label: 'RAG · 规则配置',
-    icon: <ControlOutlined />,
-    requiredRoles: PLATFORM_SCOPE_ROLES,
-    children: [
-      {
-        key: 'rag-reviewers',
-        label: '审核员名录',
-        path: '/rag/reviewers',
-        icon: <TeamOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '维护审核员与复核权限，显式暴露职责分离（SoD）冲突。',
-        phase: 'RAG · 规则配置',
-      },
-      {
-        key: 'rag-kp-alias',
-        label: '知识点别名',
-        path: '/rag/kp-alias',
-        icon: <BookOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '维护知识点别名，让口语化问法确定性匹配到规范知识点。',
-        phase: 'RAG · 规则配置',
-      },
-      {
-        key: 'rag-dictionaries',
-        label: '字典',
-        path: '/rag/dictionaries',
-        icon: <BookOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '维护治理下拉枚举的数据源；仅「来源类型」可编辑，其余为派生只读。',
-        phase: 'RAG · 规则配置',
-      },
-    ],
-  },
-  {
-    key: 'rag-ops',
-    label: 'RAG · 运维',
-    icon: <ToolOutlined />,
-    requiredRoles: PLATFORM_SCOPE_ROLES,
-    children: [
-      {
-        key: 'rag-jobs',
-        label: '摄取任务',
-        path: '/rag/jobs',
-        icon: <ThunderboltOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '入库任务三态 + 单进度条；失败可重试（新建一次尝试，旧尝试留痕）。',
-        phase: 'RAG · 运维',
-      },
-      {
-        key: 'rag-reindex',
-        label: '重索引',
-        path: '/rag/reindex',
-        icon: <DatabaseOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '补齐缺失向量 / 重建索引（同步执行）。蓝绿代际切换后端尚未提供。',
-        phase: 'RAG · 运维',
-      },
-    ],
-  },
-  {
-    key: 'system',
-    label: '系统配置',
-    icon: <ControlOutlined />,
-    requiredRoles: PLATFORM_SCOPE_ROLES,
-    children: [
-      {
-        key: 'dictionaries',
-        label: '字典配置',
-        path: '/dictionaries',
-        icon: <BookOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description:
-          '把前端下拉枚举收敛到 sys_dictionary / sys_dictionary_item 两表维护：新增、改名、停用无需改前端代码。内置字典禁止物理删除，仅可停用（避免历史数据取值悬空）。',
-        phase: '系统配置',
-      },
-      {
-        key: 'model-catalog',
-        label: '模型配置',
-        path: '/model-catalog',
-        icon: <ApiOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description:
-          '模型配置（Model Catalog）：模型定义 CRUD（供应商 / 场景 / 能力开关 / 维度 / 排序）+ 供应商密钥（仅脱敏回显，明文只上传不回显）。写端点需 PLATFORM_ADMIN，安全边界以执行时后端重授权为准。',
-        phase: '系统配置',
+        phase: '配置管理 · 策略与审计',
       },
       {
         key: 'chat-audit-config',
@@ -396,7 +456,7 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description:
           '对话审计插件（平台级单例）：控制"聊天相关所有请求"的端到端录制——端点范围、原文/thinking/逐分片采集、DB+目录双写、脱敏、采样、保留期。保存后写入即生效，无需重启。凭据类 Header 后端强制脱敏，不可关闭。',
-        phase: '系统配置',
+        phase: '配置管理 · 策略与审计',
       },
     ],
   },
@@ -439,8 +499,8 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    // O7：已实现但从未接入导航的页面统一归位；后端端点均已确认存在
-    // （/api/admin/dependencies/*、/api/admin/monitoring/*、/api/cap/config/publishes*）。
+    // 运维域按用户任务拆 section：依赖关系 / 发布策略 / 发布执行 / 运行监控。
+    // 发布策略从「配置管理 · 策略与审计」归位到发布域；审计三页已独立为「审计中心」。
     key: 'ops-observability',
     label: '运维观测与发布',
     icon: <PartitionOutlined />,
@@ -454,6 +514,7 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description: '能力闭包依赖图谱（节点 + 边，租户作用域）。GET /api/admin/dependencies/graph。',
         phase: '运维观测与发布',
+        section: '依赖关系',
       },
       {
         key: 'dependency-impact',
@@ -463,6 +524,7 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description: '按节点类型/ID 分析能力变更影响面。GET /api/admin/dependencies/impact。',
         phase: '运维观测与发布',
+        section: '依赖关系',
       },
       {
         key: 'delegation-topology',
@@ -472,6 +534,18 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description: 'Agent 之间的委派关系拓扑。GET /api/cap/delegations。',
         phase: '运维观测与发布',
+        section: '依赖关系',
+      },
+      {
+        key: 'publish-policies',
+        label: '发布策略配置',
+        path: '/publish/policies',
+        icon: <SettingOutlined />,
+        requiredRoles: PLATFORM_SCOPE_ROLES,
+        description:
+          '三层发布策略（GLOBAL / RESOURCE_TYPE / INSTANCE）控制 DIRECT / MANUAL / APPROVAL_* 分流。改动只影响后续申请，已生成的申请单不会被追溯改写。',
+        phase: '运维观测与发布',
+        section: '发布策略',
       },
       {
         key: 'publish-center',
@@ -481,6 +555,7 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description: '配置变更申请队列与当前发布指针（CAS 基线）。GET /api/cap/config/publishes。',
         phase: '运维观测与发布',
+        section: '发布执行',
       },
       {
         key: 'publish-releases',
@@ -490,15 +565,7 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description: '发布时间线（含 ROLLED_BACK），回滚目标来源。GET /api/cap/config/releases。',
         phase: '运维观测与发布',
-      },
-      {
-        key: 'publish-policies',
-        label: '发布策略配置',
-        path: '/publish/policies',
-        icon: <SettingOutlined />,
-        requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '三层发布策略（GLOBAL / RESOURCE_TYPE / INSTANCE），控制 DIRECT / MANUAL / APPROVAL_* 分流。',
-        phase: '运维观测与发布',
+        section: '发布执行',
       },
       {
         key: 'publish-drafts',
@@ -508,6 +575,7 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description: '双轨独立状态的"变更工作流轨道"：DRAFT → PENDING_APPROVAL → PENDING_PUBLISH / PUBLISH_FAILED / DISCARDED。',
         phase: '运维观测与发布',
+        section: '发布执行',
       },
       {
         key: 'publish-failures',
@@ -517,6 +585,7 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description: '结构化发布失败列表 —— 失败阶段（PRE_CHECK / PARAM_VALIDATE / DEP_CHECK / POINTER_CAS / RUNTIME_SYNC）+ 失败明细 + 重发。',
         phase: '运维观测与发布',
+        section: '发布执行',
       },
       {
         key: 'publish-versions',
@@ -526,15 +595,17 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description: '历史已发布版本时间线 + Diff + 任选一键回滚。',
         phase: '运维观测与发布',
+        section: '发布执行',
       },
       {
-        key: 'audit-business',
-        label: '业务审计日志',
-        path: '/audit/business',
-        icon: <FileTextOutlined />,
+        key: 'monitoring',
+        label: '运行监控总览',
+        path: '/monitoring',
+        icon: <LineChartOutlined />,
         requiredRoles: PLATFORM_SCOPE_ROLES,
-        description: '资产配置级业务审计：CREATE / SAVE_DRAFT / PUBLISH_SUCCESS / ROLLBACK 等全量事件，含 before/after JSON 快照 + diff。',
+        description: '运行健康快照与授权拒绝告警的统一入口（访问后直连健康快照）。',
         phase: '运维观测与发布',
+        section: '运行监控',
       },
       {
         key: 'monitoring-health',
@@ -544,6 +615,7 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description: '租户运行健康聚合快照。GET /api/admin/monitoring/health。',
         phase: '运维观测与发布',
+        section: '运行监控',
       },
       {
         key: 'monitoring-denies',
@@ -553,6 +625,7 @@ export const NAV_GROUPS: NavGroup[] = [
         requiredRoles: PLATFORM_SCOPE_ROLES,
         description: '近期授权拒绝告警下钻视图。GET /api/admin/monitoring/denies。',
         phase: '运维观测与发布',
+        section: '运行监控',
       },
     ],
   },
@@ -600,13 +673,31 @@ export const NAV_GROUPS: NavGroup[] = [
 export const NAV_NODES: NavNode[] = NAV_GROUPS.flatMap((g) => g.children)
 
 /**
- * 按路径定位导航节点：精确匹配优先，其次最长前缀。
+ * 兼容路由专用的反查节点：不进侧栏、不计入 NAV_NODES，
+ * 但面包屑/页标题/选中态必须显示真实页面语义，不能借前缀命中把旧版页显示成「工作台总览」。
+ */
+export const HIDDEN_NAV_NODES: NavNode[] = [
+  {
+    key: 'rag-legacy',
+    label: '旧版语料管理',
+    path: '/rag/legacy',
+    icon: <FileTextOutlined />,
+    requiredRoles: PLATFORM_SCOPE_ROLES,
+    description: '旧五 Tab 单页兼容入口；仅在书签/深链下可达，不占侧栏主入口。',
+    phase: 'RAG 工作台',
+  },
+]
+
+/**
+ * 按路径定位导航节点：精确匹配优先（含隐藏兼容路由），其次最长前缀。
  *
  * 前缀匹配按长度降序取最长者——否则 `/rag/sources` 会先于 `/rag/sources/new`
  * 命中，把「来源登记」误判成「来源列表」。深链 `/tenants/:id` 借此仍定位到租户管理。
  */
 export function findNavNode(pathname: string, nodes: NavNode[] = NAV_NODES): NavNode | undefined {
   const path = pathname.replace(/\/+$/, '') || '/'
+  const hidden = HIDDEN_NAV_NODES.find((n) => n.path === path)
+  if (hidden) return hidden
   return (
     nodes.find((n) => n.path === path) ??
     nodes

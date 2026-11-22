@@ -26,7 +26,6 @@ import {
 import type { PlatformTenant } from '@/api/types'
 import { TenantProvisionForm } from './TenantProvisionForm'
 import { useRegistrationModal } from './catalog/useRegistrationModal'
-import { usePageTitle } from '@/shared/usePageTitle'
 import { emptyTextWhileLoading } from '@/shared/loadingState'
 
 /**
@@ -122,7 +121,6 @@ export function TenantRegistryPage(): JSX.Element {
   /** 开通租户弹窗（C37-3：「新增」用弹窗） */
   const registration = useRegistrationModal()
 
-  usePageTitle('租户管理')
 
   /** L2/L3：各状态计数（供徽章图例与表格下方概览），随表格数据联动。 */
   const statusCounts = useMemo(() => {

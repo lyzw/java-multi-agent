@@ -1,5 +1,5 @@
 /**
- * RAG 语料管理 · 页面共享外壳（RAG-D13 四治理域导航 / RAG-D14 视觉稿）
+ * RAG 工作台 · 页面共享外壳（RAG-D13 四治理域导航 / RAG-D14 视觉稿）
  *
  * ⚠️ **为什么要有这个外壳而不是每个页面各写一遍作用域选择**：
  *    作用域（TENANT / PLATFORM）与治理票据是**全 RAG 模块的横切安全机制**——
@@ -256,7 +256,7 @@ export function RagScopeShell({
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <Paragraph type="secondary" style={{ marginBottom: 2, fontSize: 12 }}>
-              RAG 语料管理 · {domain}
+              RAG 工作台 · {domain}
             </Paragraph>
             <Typography.Title level={4} style={{ marginBottom: 4 }}>
               {title}

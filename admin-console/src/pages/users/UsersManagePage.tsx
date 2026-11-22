@@ -33,7 +33,6 @@ import type { PlatformRoleSummary, PlatformUserDetail } from '@/api/types'
 import { useSession } from '@/auth/session'
 import { ROLES } from '@/config/constants'
 import { ROLE_LABELS, ROLE_COLORS, isSuperAdmin } from '@/pages/roleShared'
-import { usePageTitle } from '@/shared/usePageTitle'
 import { emptyTextWhileLoading } from '@/shared/loadingState'
 
 const { Text } = Typography
@@ -99,7 +98,6 @@ export function UsersManagePage(): JSX.Element {
    */
   const canManageUsers = iAmSuper
 
-  usePageTitle('平台用户')
 
   const [users, setUsers] = useState<PlatformUserDetail[]>([])
   const [roleCatalog, setRoleCatalog] = useState<PlatformRoleSummary[]>([])

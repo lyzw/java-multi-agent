@@ -166,6 +166,40 @@ describe('平台控制台 · Tool 目录页（/tools · 生命周期分组）', 
     expect(screen.getAllByRole('button', { name: /停\s*用/ }).length).toBe(1)
   })
 
+  it('✅ 每行都有「改版」入口（目录宣称支持改版，入口必须可达）', async () => {
+    renderCatalog()
+    await waitFor(() => expect(screen.getAllByText('tool-published').length).toBeGreaterThan(0))
+    // antd 会在按钮汉字间插空格（「改版」读成「改 版」）
+    expect(screen.getAllByRole('button', { name: /改\s*版/ }).length).toBe(3)
+  })
+
+  it('✅ 改版弹窗预填既有定义：toolId 只读，kind 按既有值回填', async () => {
+    renderCatalog()
+    await waitFor(() => expect(screen.getByText('tool-draft')).toBeTruthy())
+
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('.ant-table-row'))
+    const draftRow = rows.find((r) => (r.textContent ?? '').includes('tool-draft'))!
+    fireEvent.click(within(draftRow).getByRole('button', { name: /改\s*版/ }))
+
+    await waitFor(() => expect(screen.getByText(/改版 Tool · tool-draft/)).toBeTruthy())
+    // Form name="platform-publish" ⇒ 字段 id 带 `platform-publish_` 前缀
+    const toolId = document.querySelector<HTMLInputElement>('#platform-publish_toolId')!
+    expect(toolId.value).toBe('tool-draft')
+    expect(toolId.disabled).toBe(true)
+    // 目录项是 HTTP 型 Tool：隐藏的 kind 必须被既有定义覆盖，不能停在默认 NATIVE
+    expect(document.querySelector<HTMLInputElement>('#platform-publish_kind')!.value).toBe('HTTP')
+  })
+
+  it('✅ 登记弹窗的隐藏 kind 默认 NATIVE（不点 Tab 也必须随表单提交）', async () => {
+    renderCatalog()
+    await waitFor(() => expect(screen.getByRole('button', { name: /登记 Tool/ })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /登记 Tool/ }))
+    await waitFor(() =>
+      expect(document.querySelector<HTMLInputElement>('#platform-publish_kind')).toBeTruthy(),
+    )
+    expect(document.querySelector<HTMLInputElement>('#platform-publish_kind')!.value).toBe('NATIVE')
+  })
+
   it('✅ 页头有「登记 Tool」与「申请队列」按钮', async () => {
     renderCatalog()
     await waitFor(() => expect(screen.getByRole('button', { name: /登记 Tool/ })).toBeTruthy())

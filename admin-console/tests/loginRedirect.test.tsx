@@ -93,9 +93,9 @@ describe('未登录跳转 · basename 不得被再拼一次', () => {
    * ⚠️ 必须有 `/login` 路由：跳过去之后探针要**继续挂着**才能读出 pathname ——
    * 没有该路由时组件直接卸载，断言会一直等不到。
    */
-  function mountProtected() {
+  function mountProtected(initialEntry = '/tenants') {
     render(
-      <MemoryRouter initialEntries={['/tenants']}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <SessionProvider>
           <Routes>
             <Route path="/login" element={<><LocationProbe /><FromProbe /></>} />
@@ -123,9 +123,16 @@ describe('未登录跳转 · basename 不得被再拼一次', () => {
   it('⛔ 来源路径必须剥掉 basename（否则登录后回跳到 /admin/admin/tenants）', async () => {
     mountProtected()
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/login'))
-    // ⚠️ `state.from` 取自 `location.pathname` —— 必须是 basename **相对**路径，
-    //    否则登录后 `navigate(from)` 会再拼一次 basename ⇒ /admin/admin/tenants ⇒ 404
+    // ⚠️ `state.from` 取自 `location.pathname + location.search` —— 必须是 basename **相对**路径，
+    //    且要带查询串：否则登录后 `navigate(from)` 会丢掉筛选/分页条件，
+    //    写成绝对前缀还会再拼一次 basename ⇒ /admin/admin/tenants ⇒ 404
     expect(screen.getByTestId('from').textContent).toBe('/tenants')
+  })
+
+  it('⛔ state.from 必须携带 search，登录后回跳不能丢筛选条件', async () => {
+    mountProtected('/tenants?tab=quota&page=2')
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/login'))
+    expect(screen.getByTestId('from').textContent).toBe('/tenants?tab=quota&page=2')
   })
 })
 
@@ -185,7 +192,7 @@ describe('登录回跳 · basename 不得被再拼一次', () => {
 
   it('✅ 登录成功且带来源路径 → 回跳到来源页（⛔ 不是双前缀）', async () => {
     vi.mocked(platformLogin).mockResolvedValue(LOGIN_OK)
-    // ⚠️ `state.from` 是 basename 相对路径（RequireAuth 取自 location.pathname）
+    // ⚠️ `state.from` 是 basename 相对路径（RequireAuth 取自 location.pathname + location.search）
     mountLogin({ from: '/agents' })
 
     await screen.findByLabelText(/用户名/)

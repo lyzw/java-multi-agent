@@ -1,3 +1,7 @@
+/**
+ * @deprecated 运行期不可达：Tool 详情已由 console 目录页的抽屉承担。
+ * 本文件仅被旧版回归测试引用，禁止在新页面/路由中 import。
+ */
 import { useCallback, useEffect, useState } from 'react'
 import { Navigate, useParams } from 'react-router-dom'
 import {

@@ -28,7 +28,6 @@ import type {
   ChatAuditRecordSummary,
 } from '@/api/chatAuditRecordApi'
 import { formatTime } from '@/pages/monitoring/monitoringFormat'
-import { usePageTitle } from '@/shared/usePageTitle'
 import { emptyTextWhileLoading } from '@/shared/loadingState'
 import { scrollXOf } from '@/shared/tableLayout'
 
@@ -72,7 +71,6 @@ const PAGE_SIZE = 50
  * <p>⚠️ 只读页：无任何写/删入口。审计原文按 PIPL 处理，保留期由后端配置页管理。
  */
 export function ChatAuditRecordListPage(): JSX.Element {
-  usePageTitle('对话审计记录')
 
   const [source, setSource] = useState<AuditRecordSource | 'ALL'>('ALL')
   const [windowHours, setWindowHours] = useState<number>(24)
@@ -85,6 +83,7 @@ export function ChatAuditRecordListPage(): JSX.Element {
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
 
   const [selected, setSelected] = useState<ChatAuditRecordSummary | null>(null)
   const [detail, setDetail] = useState<ChatAuditRecordDetail | null>(null)
@@ -106,6 +105,7 @@ export function ChatAuditRecordListPage(): JSX.Element {
     const promise = (async () => {
       setLoading(true)
       setError(null)
+      setLoadMoreError(null)
       setSelected(null)
       setDetail(null)
       try {
@@ -141,6 +141,7 @@ export function ChatAuditRecordListPage(): JSX.Element {
   const loadMore = useCallback(async (): Promise<void> => {
     if (nextCursor === null || loadingMore) return
     setLoadingMore(true)
+    setLoadMoreError(null)
     try {
       const page = await listChatAuditRecords({
         source,
@@ -154,7 +155,7 @@ export function ChatAuditRecordListPage(): JSX.Element {
       setRows((prev) => [...prev, ...page.items])
       setNextCursor(page.nextCursor)
     } catch (e) {
-      setError((prev) => prev ?? (e instanceof Error ? e.message : '加载更多失败'))
+      setLoadMoreError(e instanceof Error ? e.message : '加载更多失败')
     } finally {
       setLoadingMore(false)
     }
@@ -318,6 +319,15 @@ export function ChatAuditRecordListPage(): JSX.Element {
         </Spin>
         {nextCursor !== null && (
           <div style={{ textAlign: 'center', marginTop: 12 }}>
+            {loadMoreError && (
+              <Alert
+                type="error"
+                showIcon
+                message="加载更多失败"
+                description={loadMoreError}
+                style={{ marginBottom: 8, textAlign: 'left' }}
+              />
+            )}
             <Button onClick={() => void loadMore()} loading={loadingMore}>
               加载更多
             </Button>

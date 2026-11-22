@@ -1,3 +1,7 @@
+/**
+ * @deprecated 运行期不可达：路由已改用 pages/console/SkillCatalogPage。
+ * 本文件仅被旧版回归测试引用，禁止在新页面/路由中 import。
+ */
 import { useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Button, Form, InputNumber, Space, Typography } from 'antd'

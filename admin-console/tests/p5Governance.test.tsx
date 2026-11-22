@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import type {
   McpCatalogItem,
   PlatformAuditEvent,
@@ -27,7 +27,7 @@ import {
 } from '@/api/adminApi'
 import { AuditLogsPage } from '@/pages/audit/AuditLogsPage'
 import { RoleMatrixPage } from '@/pages/roles/RoleMatrixPage'
-import { SettingsPage } from '@/pages/settings/SettingsPage'
+import { ConfigCredentialsPage } from '@/pages/settings/ConfigCredentialsPage'
 
 // antd v5 渲染期读 matchMedia；jsdom 默认没有，补一个最小桩
 beforeAll(() => {
@@ -205,14 +205,18 @@ describe('角色权限矩阵页（/roles · 平台身份域）', () => {
   })
 })
 
-describe('P5 配置中心（/settings）— 安全红线', () => {
+describe('凭据引用登记（/config/credentials）— 安全红线', () => {
   it('凭据引用仅呈现布尔标识，任何凭据定位符/明文都不出现在 DOM 中', async () => {
     vi.mocked(getMcpCatalog).mockResolvedValue(mcpFixture)
-    render(<SettingsPage />)
+    render(<ConfigCredentialsPage />)
 
     await waitFor(() => {
       expect(screen.getByText('srv-search')).toBeInTheDocument()
     })
+    // 凭据引用登记是独立页：旧「配置中心 / 全局参数」页签与标题不再出现
+    expect(screen.getByText('凭据引用登记')).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: '全局参数' })).not.toBeInTheDocument()
+    expect(screen.queryByText('全局参数暂未开放应用层管理')).not.toBeInTheDocument()
     // 布尔标识呈现
     expect(screen.getByText('已登记')).toBeInTheDocument()
     expect(screen.getByText('未登记')).toBeInTheDocument()
@@ -222,15 +226,5 @@ describe('P5 配置中心（/settings）— 安全红线', () => {
     expect(text).not.toContain('credentialRef:')
     expect(text).not.toContain('secret')
     expect(text).not.toContain('API_KEY_VALUE')
-  })
-
-  it('全局参数页签为占位态：不提供任何写入口', async () => {
-    render(<SettingsPage />)
-    // antd Tabs 默认懒渲染：先激活「全局参数」页签
-    fireEvent.click(screen.getByRole('tab', { name: '全局参数' }))
-    expect(await screen.findByText('全局参数暂未开放应用层管理')).toBeInTheDocument()
-    // 占位态不给写按钮
-    expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '新增' })).not.toBeInTheDocument()
   })
 })

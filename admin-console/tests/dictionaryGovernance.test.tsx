@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { App as AntApp } from 'antd'
 import { DictionaryAdminPage } from '@/pages/dictionaries/DictionaryAdminPage'
@@ -25,7 +25,7 @@ vi.mock('@/api/dictionaryApi', () => ({
   disableDictionaryItem: vi.fn(),
 }))
 
-import { getDictionaries, disableDictionaryItem } from '@/api/dictionaryApi'
+import { getDictionaries, disableDictionaryItem, updateDictionary } from '@/api/dictionaryApi'
 
 const fixture: DictionaryView[] = [
   {
@@ -191,5 +191,17 @@ describe('字典配置页 · 治理纪律', () => {
       norm(b.textContent),
     )
     expect(rowButtons).not.toContain('停用')
+  })
+
+  it('⛔ 字典启用开关必须先确认再写服务端', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getAllByText('HTTP 方法').length).toBeGreaterThan(0))
+    const sw = screen.getByRole('switch')
+    fireEvent.click(sw)
+    expect(await screen.findByText('确认停用该字典？')).toBeTruthy()
+    expect(updateDictionary).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /确\s*认/ }))
+    await waitFor(() => expect(updateDictionary).toHaveBeenCalledTimes(1))
   })
 })

@@ -9,16 +9,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import cn.studykid.multiagent.infrastructure.security.PrincipalRepository.PasswordHasher;
+import cn.studykid.multiagent.ports.security.PrincipalStore.PasswordHasher;
 
 /**
  * 平台账号带外安装器（admin-console 登录用）。
  *
- * <p>口令哈希一律由运行中的服务端同一实现（{@code PasswordHasher}）现算，
+ * <p>口令哈希一律由运行中的服务端同一实现（{@code PrincipalStore.PasswordHasher}）现算，
  * 仓库里不留哈希、不留口令：口令只从环境变量 {@code SEED_ACCOUNT_PASSWORD} 读取，
  * 经 PreparedStatement 落库，绝不拼进 SQL 文本（避免 shell 特殊字符把写入静默吞掉）。
+ * 只有本轮**写入**口令的账号（新建 / {@code --reset}）才读回哈希验一遍；
+ * 未带 {@code --reset} 的既有账号保留原口令，跳过校验（否则与「不改写」语义矛盾）。
  *
- * <p>用法（单文件源码启动，classpath 需含 pgjdbc 与 agent-infrastructure 编译产物）：
+ * <p>用法（单文件源码启动，classpath 需含 pgjdbc 与 agent-ports 编译产物）：
  * <pre>
  *   SEED_DB_URL=... SEED_DB_USER=... SEED_DB_PASSWORD=... SEED_ACCOUNT_PASSWORD=... \
  *   java -cp "$PGJAR:$CLASSES" scripts/tools/SeedPlatformUsers.java            # dry-run（回滚）
@@ -51,6 +53,10 @@ public final class SeedPlatformUsers {
 
     private static final String NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
+    /** 安装结果：用户 id + 本轮是否真的写入了口令（决定是否校验 SEED_ACCOUNT_PASSWORD）。 */
+    private record InstallResult(UUID userId, boolean passwordApplied) {
+    }
+
     public static void main(String[] args) throws Exception {
         String url = env("SEED_DB_URL");
         String dbUser = env("SEED_DB_USER");
@@ -82,9 +88,13 @@ public final class SeedPlatformUsers {
             for (Map.Entry<String, String> e : ACCOUNTS.entrySet()) {
                 String username = e.getKey();
                 String roleName = e.getValue();
-                UUID userId = insertUser(c, username, displayName(username), hash, reset);
-                bindRole(c, userId, roleName, grantorId);
-                verify(c, username, accountPassword);
+                InstallResult installed = insertUser(c, username, displayName(username), hash, reset);
+                bindRole(c, installed.userId(), roleName, grantorId);
+                if (installed.passwordApplied()) {
+                    verify(c, username, accountPassword);
+                } else {
+                    System.out.println("      口令校验: 跳过（既有账号未 --reset，保留原口令）");
+                }
             }
 
             System.out.println();
@@ -100,9 +110,9 @@ public final class SeedPlatformUsers {
         }
     }
 
-    /** 返回用户 id；新建时 true，命中已有行时 false（默认不改写既有口令）。 */
-    private static UUID insertUser(Connection c, String username, String displayName,
-                                   String hash, boolean reset) throws SQLException {
+    /** 返回用户 id 与本轮是否写入口令；新建或 --reset 命中才写入（默认保留既有口令）。 */
+    private static InstallResult insertUser(Connection c, String username, String displayName,
+                                            String hash, boolean reset) throws SQLException {
         String sql = """
                 INSERT INTO platform.platform_user
                       (username, email, display_name, status, auth_source, password_hash, mfa_required)
@@ -121,12 +131,13 @@ public final class SeedPlatformUsers {
             try (ResultSet rs = ps.executeQuery()) {
                 rs.next();
                 UUID id = rs.getObject("id", UUID.class);
+                boolean inserted = rs.getBoolean("inserted");
                 // ⚠️ 文案必须与实际行为一致：--reset 命中已有账号时会改写口令，
                 // 旧文案「跳过口令」让人误以为没生效，排查登录问题时白绕一圈。
                 System.out.printf("  %-16s %s%n", username,
-                        rs.getBoolean("inserted") ? "已创建"
+                        inserted ? "已创建"
                                 : (reset ? "已存在（口令已重置）" : "已存在（口令未改动）"));
-                return id;
+                return new InstallResult(id, inserted || reset);
             }
         }
     }

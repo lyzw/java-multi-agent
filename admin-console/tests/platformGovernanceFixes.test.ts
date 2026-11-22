@@ -25,9 +25,18 @@ describe('DEF-02 平台审计角色口径（后端实测 200，前端门禁曾�
 
   it('navConfig 审计菜单 requiredRoles 与 AUDIT_SCOPE 一致', () => {
     const nav = read('src/layout/navConfig.tsx')
-    const auditBlock = nav.match(/key: 'audit'[\s\S]{0,420}/)?.[0] ?? ''
-    expect(auditBlock).toContain('ROLES.SECURITY_ADMIN')
-    expect(auditBlock).toContain('ROLES.AUDITOR')
+    const scope = nav.match(/const AUDIT_SCOPE[^=]*=\s*\[([^\]]*)\]/)?.[1] ?? ''
+    expect(scope).toContain('ROLES.SUPER_ADMIN')
+    expect(scope).toContain('ROLES.SECURITY_ADMIN')
+    expect(scope).toContain('ROLES.AUDITOR')
+    // 三页共用同一常量：业务审计不再误用 PLATFORM_SCOPE_ROLES。
+    for (const key of ['audit', 'chat-audit-records', 'audit-business']) {
+      const block = nav.match(new RegExp(`key: '${key}'[\\s\\S]{0,420}`))?.[0] ?? ''
+      expect(block).toContain('requiredRoles: AUDIT_SCOPE')
+    }
+    const router = read('src/router.tsx')
+    const businessBlock = router.match(/path: 'audit\/business'[\s\S]{0,240}/)?.[0] ?? ''
+    expect(businessBlock).toContain('RequireRole roles={AUDIT_SCOPE}')
   })
 })
 

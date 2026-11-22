@@ -31,7 +31,6 @@ import { renderStamp } from '@/features/quality/transcriptPresentation'
 import { TraceTranscriptDrawer } from '@/features/quality/TraceTranscriptDrawer'
 import { emptyTextWhileLoading } from '@/shared/loadingState'
 import { scrollXOf } from '@/shared/tableLayout'
-import { usePageTitle } from '@/shared/usePageTitle'
 
 /**
  * 人工审查队列（P2 审查闭环 + P3 评估双轨的落地界面）。
@@ -86,7 +85,6 @@ function describeWriteError(e: unknown): string {
 }
 
 export function ReviewQueuePage(): JSX.Element {
-  usePageTitle('人工审查队列')
 
   const [searchParams, setSearchParams] = useSearchParams()
   const [status, setStatus] = useState('')

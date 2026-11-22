@@ -7,7 +7,6 @@ import {
   Divider,
   Form,
   Input,
-  InputNumber,
   Row,
   Select,
   Space,
@@ -24,6 +23,7 @@ import {
   type ChatAuditConfig,
   type ChatAuditConfigResponse,
 } from '@/api/chatAuditConfigApi'
+import { ParamField, ParamGrid } from '@/shared/config/ParamField'
 
 const { Text, Title } = Typography
 
@@ -115,9 +115,18 @@ export function ChatAuditConfigPage(): JSX.Element {
             <Form.Item label="审计总开关" name="enabled" valuePropName="checked" extra="关闭后所有端点均不录制；配置仍保留。">
               <Switch checkedChildren="开启" unCheckedChildren="关闭" />
             </Form.Item>
-            <Form.Item label="采样率" name={['sampling', 'rate']} extra="1.0 = 全量记录；0~1 之间按 traceId 确定性抽样。">
-              <InputNumber min={0} max={1} step={0.05} style={{ width: 180 }} />
-            </Form.Item>
+            <ParamField
+              spec={{
+                name: ['sampling', 'rate'],
+                label: '采样率',
+                kind: 'number',
+                description: '1.0 = 全量记录；0~1 之间按 traceId 确定性抽样。',
+                min: 0,
+                max: 1,
+                step: 0.05,
+                width: 180,
+              }}
+            />
           </Card>
 
           {/* 采集范围 */}
@@ -209,13 +218,60 @@ export function ChatAuditConfigPage(): JSX.Element {
               </Col>
             </Row>
             <Divider style={{ margin: '4px 0 12px' }} />
-            <Space size={16} wrap>
-              <Form.Item label="队列容量" name={['writer', 'queueCapacity']}><InputNumber min={1} max={100000} /></Form.Item>
-              <Form.Item label="单请求分片上限" name={['writer', 'maxChunksPerRequest']}><InputNumber min={1} max={1000000} /></Form.Item>
-              <Form.Item label="保留天数" name={['retention', 'days']} extra="PIPL 留存，默认 30 天"><InputNumber min={1} max={180} /></Form.Item>
-              <Form.Item label="请求体上限(字节)" name={['limits', 'maxBodyBytes']}><InputNumber min={1} /></Form.Item>
-              <Form.Item label="回答上限(字符)" name={['limits', 'maxAnswerChars']}><InputNumber min={1} /></Form.Item>
-            </Space>
+            <ParamGrid>
+              <ParamField
+                spec={{
+                  name: ['writer', 'queueCapacity'],
+                  label: '队列容量',
+                  kind: 'number',
+                  description: '异步写入队列上限。',
+                  min: 1,
+                  max: 100000,
+                }}
+              />
+              <ParamField
+                spec={{
+                  name: ['writer', 'maxChunksPerRequest'],
+                  label: '单请求分片上限',
+                  kind: 'number',
+                  description: '超出后该请求的剩余分片不再记录。',
+                  min: 1,
+                  max: 1000000,
+                }}
+              />
+              <ParamField
+                spec={{
+                  name: ['retention', 'days'],
+                  label: '保留天数',
+                  kind: 'number',
+                  description: 'PIPL 留存，默认 30 天。',
+                  min: 1,
+                  max: 180,
+                  unit: '天',
+                  risk: 'high',
+                }}
+              />
+              <ParamField
+                spec={{
+                  name: ['limits', 'maxBodyBytes'],
+                  label: '请求体上限(字节)',
+                  kind: 'number',
+                  description: '原文超限部分按截断处理。',
+                  min: 1,
+                  unit: '字节',
+                }}
+              />
+              <ParamField
+                spec={{
+                  name: ['limits', 'maxAnswerChars'],
+                  label: '回答上限(字符)',
+                  kind: 'number',
+                  description: '回答原文的字符上限。',
+                  min: 1,
+                  unit: '字符',
+                }}
+              />
+            </ParamGrid>
           </Card>
 
           <Space style={{ marginTop: 16 }}>

@@ -18,7 +18,6 @@ import { ReloadOutlined } from '@ant-design/icons'
 import { getPlatformAuditEvents } from '@/api/adminApi'
 import type { PlatformAuditEvent } from '@/api/types'
 import { formatTime } from '@/pages/monitoring/monitoringFormat'
-import { usePageTitle } from '@/shared/usePageTitle'
 import { emptyTextWhileLoading } from '@/shared/loadingState'
 import { scrollXOf } from '@/shared/tableLayout'
 
@@ -71,7 +70,6 @@ export function AuditLogsPage(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<PlatformAuditEvent | null>(null)
 
-  usePageTitle('平台审计')
 
   /**
    * DEF-03（2026-11-13 E2E 实测）：dev 下 React.StrictMode 会连续调用两次 effect，

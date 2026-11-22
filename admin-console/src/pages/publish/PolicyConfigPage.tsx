@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Button, Card, Form, Input, Modal, Popconfirm, Select, Space,
-  Switch, Table, Tag, Typography, App as AntApp,
+  Button, Card, Form, Modal, Popconfirm, Space,
+  Table, Tag, Typography, App as AntApp,
 } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import {
@@ -9,6 +9,7 @@ import {
   updatePublishPolicy, type PublishPolicyCreate, type PublishPolicyItem,
   type PublishMode, type PublishPolicyLevel,
 } from '@/api/publishWorkflow'
+import { ParamField } from '@/shared/config/ParamField'
 
 const MODE_LABELS: Record<PublishMode, { label: string; color: string }> = {
   DIRECT:            { label: '免审直发', color: 'green' },
@@ -187,46 +188,86 @@ export function PolicyConfigPage(): JSX.Element {
         width={560}
       >
         <Form form={form} layout="vertical" preserve={false}>
-          <Form.Item label="作用域" name="scope" rules={[{ required: true }]}
-            extra="平台 = Tool / Skill / MCP / 全局 Agent；租户 = Agent / 输出契约 / 路由策略">
-            <Select options={[
-              { value: 'PLATFORM', label: 'PLATFORM（平台能力目录）' },
-              { value: 'TENANT', label: 'TENANT（租户能力）' },
-            ]} />
-          </Form.Item>
+          <ParamField
+            spec={{
+              name: 'scope',
+              label: '作用域',
+              kind: 'enum',
+              required: true,
+              description: '平台 = Tool / Skill / MCP / 全局 Agent；租户 = Agent / 输出契约 / 路由策略',
+              options: [
+                { value: 'PLATFORM', label: 'PLATFORM（平台能力目录）' },
+                { value: 'TENANT', label: 'TENANT（租户能力）' },
+              ],
+            }}
+          />
 
-          <Form.Item label="策略层级" name="policyLevel" rules={[{ required: true }]}>
-            <Select options={[
-              { value: 'GLOBAL', label: 'GLOBAL（全局默认）' },
-              { value: 'RESOURCE_TYPE', label: 'RESOURCE_TYPE（按资源类型）' },
-              { value: 'INSTANCE', label: 'INSTANCE（单实例覆盖）' },
-            ]} />
-          </Form.Item>
+          <ParamField
+            spec={{
+              name: 'policyLevel',
+              label: '策略层级',
+              kind: 'enum',
+              required: true,
+              description: '优先级：INSTANCE > RESOURCE_TYPE > GLOBAL',
+              options: [
+                { value: 'GLOBAL', label: 'GLOBAL（全局默认）' },
+                { value: 'RESOURCE_TYPE', label: 'RESOURCE_TYPE（按资源类型）' },
+                { value: 'INSTANCE', label: 'INSTANCE（单实例覆盖）' },
+              ],
+            }}
+          />
 
           {watchLevel && watchLevel !== 'GLOBAL' && (
-            <Form.Item label="资源类型" name="resourceKind" rules={[{ required: true }]}>
-              <Select options={RESOURCE_KINDS} />
-            </Form.Item>
+            <ParamField
+              spec={{
+                name: 'resourceKind',
+                label: '资源类型',
+                kind: 'enum',
+                required: true,
+                description: '与策略层级成对出现；GLOBAL 层级不填。',
+                options: RESOURCE_KINDS,
+              }}
+            />
           )}
 
           {watchLevel === 'INSTANCE' && (
-            <Form.Item label="资源 ID" name="resourceId" rules={[{ required: true }]}>
-              <Input placeholder="目标资源的唯一标识" />
-            </Form.Item>
+            <ParamField
+              spec={{
+                name: 'resourceId',
+                label: '资源 ID',
+                kind: 'text',
+                required: true,
+                description: '目标资源的唯一标识',
+                placeholder: '目标资源的唯一标识',
+              }}
+            />
           )}
 
-          <Form.Item label="发布模式" name="publishMode" rules={[{ required: true }]}>
-            <Select options={[
-              { value: 'DIRECT', label: 'DIRECT — 免审直发' },
-              { value: 'MANUAL', label: 'MANUAL — 手动发布' },
-              { value: 'APPROVAL_MANUAL', label: 'APPROVAL_MANUAL — 审批后手动发布' },
-              { value: 'APPROVAL_AUTO', label: 'APPROVAL_AUTO — 审批后自动发布' },
-            ]} />
-          </Form.Item>
+          <ParamField
+            spec={{
+              name: 'publishMode',
+              label: '发布模式',
+              kind: 'enum',
+              required: true,
+              description: 'MANUAL = 提交后仍需手动执行；APPROVAL_* 需双人复核。',
+              risk: 'high',
+              options: [
+                { value: 'DIRECT', label: 'DIRECT — 免审直发' },
+                { value: 'MANUAL', label: 'MANUAL — 手动发布' },
+                { value: 'APPROVAL_MANUAL', label: 'APPROVAL_MANUAL — 审批后手动发布' },
+                { value: 'APPROVAL_AUTO', label: 'APPROVAL_AUTO — 审批后自动发布' },
+              ],
+            }}
+          />
 
-          <Form.Item label="启用" name="enabled" valuePropName="checked">
-            <Switch />
-          </Form.Item>
+          <ParamField
+            spec={{
+              name: 'enabled',
+              label: '启用',
+              kind: 'boolean',
+              description: '停用后该层级不再参与策略解析，回退到更低优先级策略。',
+            }}
+          />
         </Form>
       </Modal>
     </Card>

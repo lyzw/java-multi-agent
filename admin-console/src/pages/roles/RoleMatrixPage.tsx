@@ -4,7 +4,6 @@ import { getPlatformPermissions, getPlatformRoles } from '@/api/adminApi'
 import type { PlatformPermissionSummary, PlatformRoleSummary } from '@/api/types'
 import { PLATFORM_SCOPE_ROLES } from '@/config/constants'
 import { ROLE_LABELS, ROLE_COLORS } from '@/pages/roleShared'
-import { usePageTitle } from '@/shared/usePageTitle'
 
 const { Text, Paragraph } = Typography
 
@@ -59,7 +58,6 @@ export function RoleMatrixPage(): JSX.Element {
   /** 权限码 → 中文说明（来自 GET /api/platform/v1/permissions，非关键数据，失败留空） */
   const [permDesc, setPermDesc] = useState<Record<string, string>>({})
 
-  usePageTitle('角色权限矩阵')
 
   const load = useCallback(() => {
     setLoading(true)

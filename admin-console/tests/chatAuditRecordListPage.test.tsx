@@ -149,4 +149,20 @@ describe('对话审计记录查询页', () => {
     await waitFor(() => expect(screen.getByText('加载失败')).toBeTruthy())
     expect(screen.getByText('平台运维通道未接入')).toBeTruthy()
   })
+
+  it('翻页失败只显示分页附近的错误，不污染首屏全局 error', async () => {
+    listMock
+      .mockResolvedValueOnce({ items: [row()], nextCursor: 'cur-1' })
+      .mockRejectedValueOnce(new Error('翻页游标已失效'))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('我的孩子数学很差')).toBeTruthy())
+    expect(screen.queryByText('加载失败')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '加载更多' }))
+    await waitFor(() => expect(screen.getByText('翻页游标已失效')).toBeTruthy())
+    expect(screen.getByText('加载更多失败')).toBeTruthy()
+    // ⛔ 翻页失败不得升级为首屏级「加载失败」横幅
+    expect(screen.queryByText('加载失败')).toBeNull()
+  })
 })

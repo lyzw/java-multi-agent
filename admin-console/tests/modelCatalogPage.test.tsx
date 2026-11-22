@@ -228,4 +228,31 @@ describe('模型配置页 · Feature B 供应商密钥', () => {
     expect(call.provider).toBe('openai')
     expect(call.apiKey).toBe('sk-secret-12345')
   })
+
+  it('✅ 模型参数用统一字段契约展示范围、单位与风险', async () => {
+    renderPage()
+    const pane = activePane()
+    await waitFor(() => expect(within(pane).getByText('gpt-4o')).toBeTruthy())
+    fireEvent.click(within(pane).getByRole('button', { name: /新\s*建\s*模\s*型/ }))
+    expect(await screen.findByText('总上下文窗口（输入+输出 Token）')).toBeTruthy()
+    expect(screen.getByText(/范围 4096 ~ 1000000/)).toBeTruthy()
+    expect(screen.getAllByText(/单位 Token/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/不得超过总上下文窗口/)).toBeTruthy()
+    expect(screen.getByText('需确认')).toBeTruthy()
+  })
+
+  it('⛔ 表格里的启用开关必须先确认再写服务端', async () => {
+    renderPage()
+    const pane = activePane()
+    await waitFor(() => expect(within(pane).getByText('gpt-4o')).toBeTruthy())
+    const switches = within(pane).getAllByRole('switch')
+    expect(switches.length).toBeGreaterThan(0)
+
+    fireEvent.click(switches[0]!)
+    expect(await screen.findByText('确认停用该模型？')).toBeTruthy()
+    expect(updateModel).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /确\s*认/ }))
+    await waitFor(() => expect(updateModel).toHaveBeenCalledTimes(1))
+  })
 })

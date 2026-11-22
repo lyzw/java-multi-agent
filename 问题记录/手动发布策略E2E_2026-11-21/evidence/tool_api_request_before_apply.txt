@@ -1,0 +1,5 @@
+=== 2026-11-21T15:16:52Z Tool 申请提交后、手动执行前 ===
+9acc66d1-63ea-49ea-bb81-86620b00fc8a|PLATFORM|APPROVED|[发布策略自动放行] mode=MANUAL; policyLevel=GLOBAL; policyId=a1945d9a-01d0-47a6-8129-ecbbd645369b; fromGlobalFallback=true|NULL|2026-11-21 23:15:59.231965+08
+PLATFORM|1993|1967
+TENANT:8394ad1e-5cb2-4d51-a0bb-2ee2e38b5751|1992|1966
+28|1993

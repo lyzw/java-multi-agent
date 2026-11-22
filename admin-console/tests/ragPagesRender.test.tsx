@@ -116,7 +116,7 @@ describe('RAG 13 页挂载守卫', () => {
     for (const p of PAGES) {
       const { container, unmount } = render(<MemoryRouter>{p.el()}</MemoryRouter>)
       const text = container.textContent ?? ''
-      expect(text, `${p.name} 缺少外壳面包屑`).toContain('RAG 语料管理 ·')
+      expect(text, `${p.name} 缺少外壳面包屑`).toContain('RAG 工作台 ·')
       unmount()
     }
   })
@@ -170,8 +170,8 @@ describe('RAG 13 页挂载守卫', () => {
   })
 
   /**
-   * ⚠️ **覆盖边界（如实登记）**：旧的 `/rag` 单页入口（{@link RagManagementPage}）
-   *    不在上面的挂载清单里。
+   * ⚠️ **覆盖边界（如实登记）**：旧五 Tab 兼容页（现在为 `/rag/legacy`，
+   *    对应 {@link RagManagementPage}）不在上面的挂载清单里。
    *
    *    原因不是懒，是它**挂不住**：该页用 useRagIngestJobs，那个 hook 在挂载后
    *    会 setTimeout 自递归轮询（且不可见时也只是「推迟到下一个周期」再排一次），
@@ -181,7 +181,7 @@ describe('RAG 13 页挂载守卫', () => {
    *    替代守法是静态体检：把那个文件当文本读，断言它满足那几条曾出事的结构约束。
    *    这比「假装它也挂载过」诚实——后者会让覆盖清单看起来更漂亮，却少了它。
    */
-  it('旧 /rag 入口页：静态结构体检（它不参与挂载守卫）', async () => {
+  it('旧 /rag/legacy 兼容页：静态结构体检（它不参与挂载守卫）', async () => {
     const fs = await import('node:fs')
     const path = await import('node:path')
     // ⚠️ 不用 import.meta.url：jsdom 环境下它不是 file: 协议，readFileSync 会抛

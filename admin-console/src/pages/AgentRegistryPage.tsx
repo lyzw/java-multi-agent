@@ -1,3 +1,7 @@
+/**
+ * @deprecated 运行期不可达：路由已改用 pages/console/AgentRegistryPage。
+ * 本文件仅被旧版回归测试引用，禁止在新页面/路由中 import。
+ */
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {

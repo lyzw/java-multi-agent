@@ -1,3 +1,7 @@
+/**
+ * @deprecated 运行期不可达：Agent 注册表已改用 pages/console/* + 详情抽屉。
+ * 本文件仅被旧版回归测试引用，禁止在新页面/路由中 import。
+ */
 import { useCallback, useEffect, useState } from 'react'
 import { Navigate, useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {

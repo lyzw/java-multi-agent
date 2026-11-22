@@ -12,8 +12,10 @@
 #   （命令行参数会在 ps 里可见；旧 dev-seed.sh 把口令字符串拼进 Java 源码，
 #     `!`/`$` 一类字符会让写入静默失败，这里改成 env + PreparedStatement）。
 #
-# 【哈希由谁算】服务端同一个 PrincipalRepository$PasswordHasher（PBKDF2-HMAC-SHA256
-#   600k 迭代）。装完立刻读回库里的哈希 verify 一次，登录 401 不会留到运行时才发现。
+# 【哈希由谁算】服务端同一个 PrincipalStore$PasswordHasher（PBKDF2-HMAC-SHA256
+#   600k 迭代，类在 agent-ports 模块）。对本轮**写入**口令的账号装完立刻读回哈希
+#   verify 一次，登录 401 不会留到运行时才发现；未带 --reset 的既有账号保留原口令，
+#   无从也无需用 SEED_ACCOUNT_PASSWORD 校验（否则与「不改写既有口令」自相矛盾）。
 #
 # 【为什么走 JDBC 而不是 psql/docker】本地 Docker 守护不可用、机器上没装 psql。
 #   platform schema 归库 owner（ai_agent）所有；app_agent 对它刻意无写权限。
@@ -41,10 +43,11 @@ PGJAR="$(ls -1 "$HOME"/.m2/repository/org/postgresql/postgresql/*/postgresql-*.j
   | grep -v sources | tail -1 || true)"
 [ -n "$PGJAR" ] || { echo "❌ 找不到 pgjdbc jar（~/.m2/repository/org/postgresql/postgresql/）"; exit 1; }
 
-CLASSES="$REPO/platform/agent-infrastructure/target/classes"
-if [ ! -d "$CLASSES" ]; then
-  echo "▶ 编译 agent-infrastructure（PasswordHasher 所在模块）…"
-  (cd "$REPO" && mvn -q -pl platform/agent-infrastructure -am -DskipTests compile)
+CLASSES="$REPO/platform/agent-ports/target/classes"
+HASHER_CLASS="$CLASSES/cn/studykid/multiagent/ports/security/PrincipalStore\$PasswordHasher.class"
+if [ ! -f "$HASHER_CLASS" ]; then
+  echo "▶ 编译 agent-ports（PasswordHasher 所在模块）…"
+  (cd "$REPO" && mvn -q -f platform/pom.xml -pl agent-ports -am -DskipTests compile)
 fi
 
 # DB 凭据：优先已导出的环境变量，否则从 platform.env 取 platform_ops 运维通道

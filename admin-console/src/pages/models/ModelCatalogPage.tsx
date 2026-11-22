@@ -7,7 +7,6 @@ import {
   Drawer,
   Form,
   Input,
-  InputNumber,
   Divider,
   Modal,
   Popconfirm,
@@ -36,6 +35,7 @@ import type {
   ProviderCredential,
 } from '@/api/modelCatalogApi'
 import { formatTime } from '@/pages/monitoring/monitoringFormat'
+import { ParamField, ParamGrid } from '@/shared/config/ParamField'
 
 const { Text } = Typography
 
@@ -245,7 +245,17 @@ function ModelDefinitionsPane(): JSX.Element {
       dataIndex: 'isEnabled',
       width: 90,
       render: (v: boolean, record: ModelConfig) => (
-        <Switch checked={v} onChange={(checked) => handleToggleEnabled(record, checked)} />
+        <Popconfirm
+          title={v ? '确认停用该模型？' : '确认启用该模型？'}
+          description={v
+            ? '停用后新请求不再选中该模型；已有调用不受影响。'
+            : '启用后新请求可能选中该模型，请确认配置与密钥已就绪。'}
+          okText="确认"
+          cancelText="取消"
+          onConfirm={() => void handleToggleEnabled(record, !v)}
+        >
+          <Switch checked={v} />
+        </Popconfirm>
       ),
     },
     {
@@ -358,37 +368,20 @@ function ModelDefinitionsPane(): JSX.Element {
             <Input placeholder="如 gpt-4o / minimax-01 / bge-large-zh" />
           </Form.Item>
 
-          <Form.Item name="displayName" label="显示名">
-            <Input placeholder="界面展示用名称（可空）" />
-          </Form.Item>
-
-          <Form.Item name="baseUrl" label="Base URL">
-            <Input placeholder="如 https://api.openai.com/v1（可空）" />
-          </Form.Item>
-
-          <Form.Item name="dimension" label="向量维度（embedding 模型）">
-            <InputNumber style={{ width: '100%' }} min={1} placeholder="如 1536（非 embedding 留空）" />
-          </Form.Item>
-
-          <Form.Item name="sortOrder" label="排序">
-            <InputNumber style={{ width: '100%' }} />
-          </Form.Item>
-
-          <Form.Item name="isDefault" label="默认模型" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="isEnabled" label="启用" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="supportsTools" label="支持工具调用" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="supportsStreaming" label="支持流式" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="supportsVision" label="支持视觉" valuePropName="checked">
-            <Switch />
-          </Form.Item>
+          <ParamGrid>
+            <ParamField spec={{ name: 'displayName', label: '显示名', kind: 'text', placeholder: '界面展示用名称（可空）' }} />
+            <ParamField spec={{ name: 'baseUrl', label: 'Base URL', kind: 'text', placeholder: '如 https://api.openai.com/v1（可空）' }} />
+            <ParamField spec={{
+              name: 'dimension', label: '向量维度（embedding 模型）', kind: 'number',
+              min: 1, unit: '维', placeholder: '如 1536（非 embedding 留空）',
+            }} />
+            <ParamField spec={{ name: 'sortOrder', label: '排序', kind: 'number', step: 1 }} />
+            <ParamField spec={{ name: 'isDefault', label: '默认模型', kind: 'boolean' }} />
+            <ParamField spec={{ name: 'isEnabled', label: '启用', kind: 'boolean' }} />
+            <ParamField spec={{ name: 'supportsTools', label: '支持工具调用', kind: 'boolean' }} />
+            <ParamField spec={{ name: 'supportsStreaming', label: '支持流式', kind: 'boolean' }} />
+            <ParamField spec={{ name: 'supportsVision', label: '支持视觉', kind: 'boolean' }} />
+          </ParamGrid>
 
           <Divider orientation="left" plain>上下文与压缩（ADR-013）</Divider>
           <Alert
@@ -396,25 +389,32 @@ function ModelDefinitionsPane(): JSX.Element {
             showIcon
             message="模型能力未做事实探测前，请保持两个开关关闭、计数器留空（R10：不假设供应商支持精确计数 / 前缀缓存）。"
           />
-          <Form.Item name="contextWindowTokens" label="总上下文窗口（输入+输出 Token）">
-            <InputNumber style={{ width: '100%' }} min={4096} max={1000000} />
-          </Form.Item>
-          <Form.Item name="maxInputTokens" label="输入硬顶 Token（≤ 总窗口 − 4096）">
-            <InputNumber style={{ width: '100%' }} min={1024} max={1000000} />
-          </Form.Item>
-          <Form.Item name="tokenizerId" label="精确计数器标识">
-            <Input placeholder="留空 = 启发式估算（默认）" />
-          </Form.Item>
-          <Form.Item name="supportsPromptCaching" label="支持前缀缓存" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="supportsTokenizeApi" label="支持 /tokenize 精确计数" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-
-          <Form.Item name="description" label="描述">
-            <Input.TextArea rows={3} placeholder="可选说明" />
-          </Form.Item>
+          <ParamGrid>
+            <ParamField spec={{
+              name: 'contextWindowTokens', label: '总上下文窗口（输入+输出 Token）', kind: 'number',
+              min: 4096, max: 1_000_000, unit: 'Token',
+              description: '模型单次请求可用的输入输出总量；留空表示未声明。',
+            }} />
+            <ParamField spec={{
+              name: 'maxInputTokens', label: '输入硬顶 Token', kind: 'number',
+              min: 1024, max: 1_000_000, unit: 'Token', risk: 'medium',
+              description: '不得超过总上下文窗口 − 4096（为输出预留），超出由服务端拒绝。',
+            }} />
+            <ParamField spec={{
+              name: 'tokenizerId', label: '精确计数器标识', kind: 'text',
+              placeholder: '留空 = 启发式估算（默认）',
+            }} />
+            <ParamField spec={{
+              name: 'supportsPromptCaching', label: '支持前缀缓存', kind: 'boolean',
+            }} />
+            <ParamField spec={{
+              name: 'supportsTokenizeApi', label: '支持 /tokenize 精确计数', kind: 'boolean',
+            }} />
+            <ParamField spec={{
+              name: 'description', label: '描述', kind: 'text',
+              control: <Input.TextArea rows={3} placeholder="可选说明" />,
+            }} />
+          </ParamGrid>
         </Form>
       </Drawer>
     </Space>

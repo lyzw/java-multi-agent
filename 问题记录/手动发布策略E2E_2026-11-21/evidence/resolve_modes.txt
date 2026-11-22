@@ -1,0 +1,3 @@
+AGENT -> {"publishMode":"MANUAL"}
+SKILL -> {"publishMode":"MANUAL"}
+TOOL -> {"publishMode":"MANUAL"}

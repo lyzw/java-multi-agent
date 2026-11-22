@@ -1,0 +1,10 @@
+=== 2026-11-21T15:08:01Z Agent 提交后（未手动执行）===
+c329be7c-9fb5-4982-a0bf-621acbd678fb|TENANT|APPROVED|00000000-0000-0000-0000-000000000002|[发布策略自动放行] mode=MANUAL; policyLevel=GLOBAL; policyId=a1945d9a-01d0-47a6-8129-ecbbd645369b; fromGlobalFallback=true|NULL|2026-11-21 23:07:46.428894+08
+d338356d-6fc1-4a2f-94d8-0c5ae44ef82e|TENANT|APPROVED|00000000-0000-0000-0000-000000000002|[发布策略自动放行] mode=MANUAL; policyLevel=GLOBAL; policyId=a1945d9a-01d0-47a6-8129-ecbbd645369b; fromGlobalFallback=true|NULL|2026-11-21 21:34:20.054906+08
+-- target release/pointer --
+PLATFORM|PLATFORM|1986|1960
+26|1986
+-- agent definition version --
+ERROR:  column "status" does not exist
+LINE 1: select version,status,description from cap_agent_def where a...
+                       ^

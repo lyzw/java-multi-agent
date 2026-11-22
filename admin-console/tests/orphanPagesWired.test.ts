@@ -17,19 +17,34 @@ const WIRING: Array<[string, string]> = [
   ['/dependencies/delegations', 'DelegationTopologyPage'],
   ['/publish', 'PublishCenterPage'],
   ['/publish/releases', 'PublishReleasesPage'],
+  ['/publish/policies', 'PolicyConfigPage'],
+  ['/publish/drafts', 'DraftListPage'],
+  ['/publish/failures', 'PublishFailuresPage'],
+  ['/publish/versions', 'VersionHistoryPage'],
+  ['/audit/business', 'BusinessAuditLogPage'],
+  ['/monitoring', 'Navigate'],
   ['/monitoring/health', 'MonitoringHealthPage'],
   ['/monitoring/denies', 'MonitoringDeniesPage'],
 ]
+
+/** 取单条 route 的源码块（到下一条 `{ path:` 前），避免正则跨路由误命中。 */
+function routeBlock(path: string): string {
+  const rel = path.replace(/^\//, '')
+  const start = router.indexOf(`path: '${rel}'`)
+  if (start < 0) return ''
+  const next = router.indexOf('\n        {', start + 1)
+  return router.slice(start, next < 0 ? router.length : next)
+}
 
 describe('O7 孤儿页面接入', () => {
   it.each(WIRING)('%s 在导航中存在', (path) => {
     expect(NAV_NODES.some((n) => n.path === path)).toBe(true)
   })
 
-  it.each(WIRING)('%s 在路由中挂载了 %s', (path, component) => {
-    // 路由相对 basename（无前导 /），组件必须以 JSX 挂载而非仅 import。
-    const rel = path.replace(/^\//, '')
-    const pattern = new RegExp(`path:\\s*'${rel}'[^}]*element:\\s*<${component}\\s*/>`)
-    expect(router).toMatch(pattern)
+  it.each(WIRING)('%s 在路由中挂载了 %s，且深链有角色门禁', (path, component) => {
+    const block = routeBlock(path)
+    // ⛔ 只挂载组件不算：菜单隐藏后深链仍可进 ⇒ 必须与 navConfig.requiredRoles 同源。
+    expect(block).toContain(`<${component}`)
+    expect(block).toContain('RequireRole')
   })
 })

@@ -5,7 +5,6 @@ import {
   Space,
   Spin,
   Table,
-  Tabs,
   Tag,
   Typography,
 } from 'antd'
@@ -16,7 +15,7 @@ import { formatTime } from '@/pages/monitoring/monitoringFormat'
 const { Text } = Typography
 
 /**
- * MCP 凭据引用登记视图（P5 · /settings 凭据页签）。
+ * MCP 凭据引用登记视图（/config/credentials）。
  *
  * <p>⚠️ <b>本页只呈现「是否登记了凭据引用」这一布尔事实</b>：
  * credentialRef 是凭据库定位符，凭据材料与定位符<b>均不入响应</b>（§4.2 / §6.4）——
@@ -112,41 +111,11 @@ function CredentialsPane(): JSX.Element {
   )
 }
 
-/**
- * 全局参数占位（P5 · /settings 全局参数页签）。
- *
- * <p><b>刻意占位</b>：全局参数（平台级键值）的写入口同属带外运维通道；
- * 在未建立 PLATFORM_ADMIN 带外授权流程前，不提供任何写入口（fail-closed）。
- * 当前生效的平台级参数可经租户配置覆盖视图间接观测。
- */
-function GlobalsPane(): JSX.Element {
+/** 凭据引用登记（只读标识）：/config/credentials 的独立页面，不再承载旧「全局参数」占位页签。 */
+export function ConfigCredentialsPage(): JSX.Element {
   return (
-    <Alert
-      type="warning"
-      showIcon
-      message="全局参数暂未开放应用层管理"
-      description={
-        <Text>
-          平台级全局参数的变更走带外运维通道；在带外授权流程建立前，
-          本页不提供读写入口（默认拒绝）。租户内生效参数请见
-          「租户管理 → 配置覆盖」。
-        </Text>
-      }
-    />
-  )
-}
-
-/** 配置中心（P5 · /settings）：凭据引用登记（只读标识）+ 全局参数（占位） */
-export function SettingsPage(): JSX.Element {
-  return (
-    <Card title="配置中心">
-      <Tabs
-        defaultActiveKey="credentials"
-        items={[
-          { key: 'credentials', label: '凭据引用', children: <CredentialsPane /> },
-          { key: 'globals', label: '全局参数', children: <GlobalsPane /> },
-        ]}
-      />
+    <Card title="凭据引用登记">
+      <CredentialsPane />
     </Card>
   )
 }

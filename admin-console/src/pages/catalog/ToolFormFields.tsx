@@ -106,8 +106,12 @@ export function ToolFormFields({ isRegistration }: ToolFormFieldsProps): JSX.Ele
       </Form.Item>
 
       {/* ⚠️ kind 用隐藏字段承载：真正的类型选择器是下面的 Tab。
-          隐藏字段仍参与 validateFields 与 setFieldsValue。 */}
-      <Form.Item name="kind" hidden>
+          隐藏字段仍参与 validateFields 与 setFieldsValue。
+          ⚠️ 必须有 initialValue：NATIVE 是默认 Tab，用户不会去点它，
+          因而 onTabChange 永不触发；没有初值时 getFieldsValue() 里根本没有 kind，
+          buildToolSpec 读到的就是 undefined，JSON.stringify 会**整字段丢掉**，
+          后端 400「请求参数不合法」（E2E 2026-11-21 实测）。 */}
+      <Form.Item name="kind" hidden initialValue="NATIVE">
         <Input />
       </Form.Item>
 

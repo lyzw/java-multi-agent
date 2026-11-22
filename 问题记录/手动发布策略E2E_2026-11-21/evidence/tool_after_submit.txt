@@ -1,0 +1,10 @@
+=== 2026-11-21T15:14:53Z Tool 提交后 ===
+a94e1064-be82-4e13-8f3a-a64a96fb978e|PLATFORM|APPLIED|[发布策略自动放行] mode=MANUAL; policyLevel=GLOBAL; policyId=a1945d9a-01d0-47a6-8129-ecbbd645369b; fromGlobalFallback=true|2026-11-21 23:11:32.033169+08|2026-11-21 23:10:06.200823+08|{"scope": "PLATFORM", "tools": [{"kind": "NATIVE", "name": "学生档案读取", "toolId": "get_student_profile", "httpUrl": null, "riskLevel": "READ", "httpMethod": null, "description": null, "inputSchema": "{\"
+c329be7c-9fb5-4982-a0bf-621acbd678fb|TENANT|APPLIED|[发布策略自动放行] mode=MANUAL; policyLevel=GLOBAL; policyId=a1945d9a-01d0-47a6-8129-ecbbd645369b; fromGlobalFallback=true|2026-11-21 23:09:16.314032+08|2026-11-21 23:07:46.428894+08|{"scope": "TENANT", "tools": [], "agents": [{"name": "math-tutor", "roles": ["student"], "agentId": "9730eadc-c27c-498d-b588-512545c57f84", "modelRef": "MiniMax-M2.5", "overrides": "{}", "description"
+-- platform pointer --
+PLATFORM|1993|1967
+TENANT:8394ad1e-5cb2-4d51-a0bb-2ee2e38b5751|1992|1966
+-- tool def --
+ERROR:  column "tool_id" does not exist
+LINE 1: select tool_id,version,name from cap_tool_def where tool_id=...
+               ^
