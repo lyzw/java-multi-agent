@@ -109,6 +109,23 @@ public interface PlatformAgentDirectoryPort {
             @NonNull String reason,
             @NonNull String actorId,
             @NonNull Instant requestedAt,
-            @Nullable Instant appliedAt) {
+            @Nullable Instant appliedAt,
+            /**
+             * <b>变更前</b>的完整配置（JSON 文本）。
+             *
+             * <p>⚠️ 由后端在生成变更记录时从权威定义（{@code cap_agent_def}）
+             * 的<b>基线版本</b>解析得出并随身携带 —— 前端不再「按版本号 -1 反推」，
+             * 版本号不连续（清理草稿后）时反推会取错基准。
+             *
+             * <p>为 {@code null} 的情形：首个版本（无更早版本）、
+             * 以及建行 / 分配租户等非发布类审计动作。
+             */
+            @Nullable String beforeConfig,
+            /**
+             * <b>变更后</b>的完整配置（JSON 文本），取自本次申请单载荷。
+             *
+             * <p>为 {@code null} 的情形：非发布类审计动作（没有配置变更）。
+             */
+            @Nullable String afterConfig) {
     }
 }

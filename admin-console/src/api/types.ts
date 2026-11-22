@@ -1040,6 +1040,15 @@ export interface PlatformAgentChange {
   actorId: string
   requestedAt: string
   appliedAt: string | null
+  /**
+   * 变更前配置（JSON 文本）。
+   * ⚠️ 后端随记录一并下发，**不要**在前端按「版本号 - 1」反推 ——
+   * 清理草稿后版本号不连续，反推会取错基准。
+   * null = 首个版本（无更早版本）或非配置类动作（建行 / 分配租户）。
+   */
+  beforeConfig?: string | null
+  /** 变更后配置（JSON 文本）；null = 非配置类动作。 */
+  afterConfig?: string | null
 }
 
 /** 平台链上的目录项形状与租户链 /api/cap/catalog/* 完全一致（复用旧契约类型）。 */

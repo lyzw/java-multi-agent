@@ -24,8 +24,15 @@ public interface PlatformAgentDirectoryMapper {
                             String orchestrationMode, int tenantCount,
                             String pendingState, Instant pendingAt) {}
 
+    /**
+     * 变更记录行。
+     *
+     * @param beforeConfig 变更前配置（JSON 文本；首个版本 / 非发布类动作为 null）
+     * @param afterConfig  变更后配置（JSON 文本；非发布类动作为 null）
+     */
     record PlatformAgentChangeRow(String changeId, String category, String tenantId,
                                   String action, String state, Integer targetVersion,
                                   String reason, String actorId,
-                                  Instant requestedAt, Instant appliedAt) {}
+                                  Instant requestedAt, Instant appliedAt,
+                                  String beforeConfig, String afterConfig) {}
 }

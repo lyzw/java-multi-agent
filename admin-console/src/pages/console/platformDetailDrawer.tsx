@@ -510,7 +510,11 @@ export function AgentRegistryDetail({
       <AgentChangeHistory
         agentId={full.agentId}
         tenantNameOf={tenantNameOf}
-        onOpenVersionDiff={(v) => versionHistoryRef.current?.diffVersion(v)}
+        onOpenChangeDiff={(change) => versionHistoryRef.current?.diffConfig({
+          before: change.beforeConfig ?? null,
+          after: change.afterConfig ?? null,
+          label: `${changeActionText(change.action)} · 配置对比`,
+        })}
       />
 
       {/* ── 第五块：版本快照历史（含 Diff + 清理草稿；双击记录即对比）── */}
@@ -536,6 +540,11 @@ function agentLifecycleTag(state: string | null | undefined): ReactNode {
   if (state === 'VALIDATED') return <Tag color="blue">已校验</Tag>
   if (state === 'DRAFT') return <Tag color="orange">草稿</Tag>
   return <Typography.Text type="secondary">未提供</Typography.Text>
+}
+
+/** 该条记录是否携带可对比的配置变更（有变更后配置即可，变更前可为 null = 首个版本）。 */
+function hasConfigDiff(change: PlatformAgentChange): boolean {
+  return change.afterConfig != null && change.afterConfig !== ''
 }
 
 /** 变更动作 / 状态 → 中文（UUID 与英文枚举不直接出现在详情列表）。 */
@@ -567,12 +576,12 @@ function changeStateText(state: string): string {
 function AgentChangeHistory({
   agentId,
   tenantNameOf,
-  onOpenVersionDiff,
+  onOpenChangeDiff,
 }: {
   agentId: string
   tenantNameOf: (id: string) => string
-  /** 双击带目标版本的记录时，打开该版本的 Diff（由外层注入）。 */
-  onOpenVersionDiff?: (versionNumber: number) => void
+  /** 双击记录时打开其「变更前 / 变更后」配置对比（由外层注入）。 */
+  onOpenChangeDiff?: (change: PlatformAgentChange) => void
 }): JSX.Element {
   const [changes, setChanges] = useState<PlatformAgentChange[]>([])
   const [loading, setLoading] = useState(true)
@@ -623,13 +632,9 @@ function AgentChangeHistory({
         width: 110,
         fixed: 'right' as const,
         render: (_: unknown, row: PlatformAgentChange) =>
-          row.targetVersion != null && onOpenVersionDiff ? (
-            <Tooltip title={`查看 v${row.targetVersion} 与上一版本的配置差异`}>
-              <Button
-                size="small"
-                type="link"
-                onClick={() => onOpenVersionDiff(row.targetVersion as number)}
-              >
+          hasConfigDiff(row) && onOpenChangeDiff ? (
+            <Tooltip title="查看该次变更的配置前后差异（前一版 vs 本次）">
+              <Button size="small" type="link" onClick={() => onOpenChangeDiff(row)}>
                 配置对比
               </Button>
             </Tooltip>
@@ -638,7 +643,7 @@ function AgentChangeHistory({
           ),
       },
     ],
-    [tenantNameOf, onOpenVersionDiff],
+    [tenantNameOf, onOpenChangeDiff],
   )
 
   return (
@@ -657,14 +662,13 @@ function AgentChangeHistory({
           scroll={{ x: 860 }}
           locale={{ emptyText: loading ? '加载中…' : '暂无变更记录' }}
           onRow={(row) => ({
-            // ⚠️ 双击有「目标版本」的记录 → 打开该版本与上一版本的对比。
-            //   无目标版本（建行/分配租户等审计动作）不跳转，避免打开空 Diff。
+            // ⚠️ 双击 → 用记录**自带的 before/after** 打开对比。
+            //   不再按版本号反推基准（清理草稿后版本号不连续，反推会取错）。
+            //   建行 / 分配租户等管理动作没有配置变更 → 不可双击。
             onDoubleClick: () => {
-              if (row.targetVersion != null && onOpenVersionDiff) {
-                onOpenVersionDiff(row.targetVersion)
-              }
+              if (hasConfigDiff(row) && onOpenChangeDiff) onOpenChangeDiff(row)
             },
-            style: row.targetVersion != null ? { cursor: 'pointer' } : undefined,
+            style: hasConfigDiff(row) ? { cursor: 'pointer' } : undefined,
           })}
         />
       )}

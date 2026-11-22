@@ -154,7 +154,30 @@ public class JdbcPlatformAgentDirectoryRepository implements PlatformAgentDirect
                    pr.reason                 AS reason,
                    pr.requester_id           AS actor_id,
                    pr.requested_at           AS requested_at,
-                   pr.applied_at             AS applied_at
+                   pr.applied_at             AS applied_at,
+                   -- after_config：本次申请里该 Agent 的完整配置（变更后）
+                   (
+                       SELECT ag
+                       FROM jsonb_array_elements(
+                                CASE WHEN jsonb_typeof(pr.payload::jsonb -> 'agents') = 'array'
+                                     THEN pr.payload::jsonb -> 'agents'
+                                     ELSE '[]'::jsonb END) ag
+                       WHERE ag ->> 'agentId' = ?
+                       LIMIT 1
+                   )::text                   AS after_config,
+                   -- before_config：target_version 之前的最大版本配置（变更前）
+                   --   ⚠️ 用 `version < target_version` 取最大，而非 `= target_version - 1`：
+                   --      清理草稿后版本号不连续，-1 会命中不存在的行。
+                   CASE WHEN pr.target_version IS NULL THEN NULL
+                        ELSE (
+                            SELECT to_jsonb(d)
+                            FROM cap_agent_def d
+                            WHERE d.agent_id = ?::uuid
+                              AND d.version < pr.target_version
+                            ORDER BY d.version DESC
+                            LIMIT 1
+                        )::text
+                   END                       AS before_config
             FROM cap_config_publish_request pr
             WHERE EXISTS (
                       SELECT 1
@@ -194,10 +217,12 @@ public class JdbcPlatformAgentDirectoryRepository implements PlatformAgentDirect
         int size = Math.max(1, Math.min(limit, 200));
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(CHANGES_SQL)) {
-            ps.setString(1, agentId);
-            ps.setString(2, agentId);
-            ps.setString(3, agentId);
-            ps.setInt(4, size);
+            ps.setString(1, agentId);   // after_config 子查询（payload 匹配）
+            ps.setString(2, agentId);   // before_config 子查询（cap_agent_def 匹配）
+            ps.setString(3, agentId);   // WHERE EXISTS（payload 匹配）
+            ps.setString(4, agentId);   // WHERE lifecycle objectId
+            ps.setString(5, agentId);   // WHERE resource_id
+            ps.setInt(6, size);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     Timestamp requestedAt = rs.getTimestamp("requested_at");
@@ -212,7 +237,9 @@ public class JdbcPlatformAgentDirectoryRepository implements PlatformAgentDirect
                             rs.getString("reason"),
                             rs.getString("actor_id"),
                             requestedAt == null ? Instant.EPOCH : requestedAt.toInstant(),
-                            appliedAt == null ? null : appliedAt.toInstant()));
+                            appliedAt == null ? null : appliedAt.toInstant(),
+                            rs.getString("before_config"),
+                            rs.getString("after_config")));
                 }
             }
             return changes;

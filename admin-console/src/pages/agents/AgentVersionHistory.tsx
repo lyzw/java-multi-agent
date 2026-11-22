@@ -25,8 +25,19 @@ import { emptyTextWhileLoading } from '@/shared/loadingState'
  * （版本号紧邻的上一个），这样看到的就是「这次保存到底改了什么」。
  */
 export interface AgentVersionHistoryHandle {
-  /** 打开指定版本与前一版本的配置对比（供「变更记录」双击触发）。 */
+  /** 打开指定版本与前一版本的配置对比（供「变更历史」列表双击触发）。 */
   diffVersion: (versionNumber: number) => void
+  /**
+   * 直接用<b>记录自带的</b> before / after 配置打开对比（供「变更记录」双击触发）。
+   *
+   * <p>⚠️ 优先走这条路：变更记录已经把前后两份配置随记录下发，
+   * 不再按版本号反推 —— 版本号不连续时反推会取错基准。
+   */
+  diffConfig: (payload: {
+    before: string | null | undefined
+    after: string | null | undefined
+    label?: string
+  }) => void
 }
 
 export const AgentVersionHistory = forwardRef<AgentVersionHistoryHandle, { agentId: string }>(
@@ -37,6 +48,12 @@ export const AgentVersionHistory = forwardRef<AgentVersionHistoryHandle, { agent
     const [diffFrom, setDiffFrom] = useState<AgentDefinition | null>(null)
     const [diffTo, setDiffTo] = useState<AgentDefinition | null>(null)
     const [diffOpen, setDiffOpen] = useState(false)
+    /** 记录自带的 before/after（变更记录双击走这里，不依赖版本反推）。 */
+    const [rawDiff, setRawDiff] = useState<{
+      before: string | null
+      after: string | null
+      label: string
+    } | null>(null)
 
     const load = useCallback(async () => {
       setLoading(true)
@@ -80,6 +97,7 @@ export const AgentVersionHistory = forwardRef<AgentVersionHistoryHandle, { agent
       }
       setDiffFrom(before)
       setDiffTo(after)
+      setRawDiff(null)
       setDiffOpen(true)
     }, [message])
 
@@ -92,12 +110,29 @@ export const AgentVersionHistory = forwardRef<AgentVersionHistoryHandle, { agent
       openDiff(previousOf(versionNumber), target)
     }, [rows, previousOf, openDiff, message])
 
-    useImperativeHandle(ref, () => ({ diffVersion }), [diffVersion])
+    const diffConfig = useCallback((payload: {
+      before: string | null | undefined
+      after: string | null | undefined
+      label?: string
+    }) => {
+      if (payload.after == null) {
+        message.info('该记录没有配置变更内容（建行 / 分配租户等管理动作）')
+        return
+      }
+      setRawDiff({
+        before: payload.before ?? null,
+        after: payload.after,
+        label: payload.label ?? '配置变更',
+      })
+    }, [message])
+
+    useImperativeHandle(ref, () => ({ diffVersion, diffConfig }), [diffVersion, diffConfig])
 
     const closeDiff = () => {
       setDiffOpen(false)
       setDiffFrom(null)
       setDiffTo(null)
+      setRawDiff(null)
     }
 
     const handleCleanup = () => {
@@ -226,7 +261,13 @@ export const AgentVersionHistory = forwardRef<AgentVersionHistoryHandle, { agent
           />
         )}
 
-        <ConfigDiffModal open={diffOpen} onClose={closeDiff} before={diffFrom} after={diffTo} />
+        <ConfigDiffModal
+          open={diffOpen || rawDiff !== null}
+          onClose={closeDiff}
+          before={diffFrom}
+          after={diffTo}
+          raw={rawDiff}
+        />
       </div>
     )
   },
@@ -241,6 +282,8 @@ interface ConfigDiffModalProps {
   onClose: () => void
   before: AgentDefinition | null
   after: AgentDefinition | null
+  /** 记录自带的 before/after 原始配置（优先于 before/after 两个版本对象）。 */
+  raw?: { before: string | null; after: string | null; label: string } | null
 }
 
 /** 把结构化定义转成用于 diff 的对象（只取配置语义字段，版本号/时间不参与比对）。 */
@@ -265,22 +308,36 @@ function safeParse(raw: string | undefined | null): unknown {
   try { return JSON.parse(raw) } catch { return raw }
 }
 
-function ConfigDiffModal({ open, onClose, before, after }: ConfigDiffModalProps): JSX.Element | null {
+function ConfigDiffModal({
+  open, onClose, before, after, raw,
+}: ConfigDiffModalProps): JSX.Element | null {
   const [view, setView] = useState<'unified' | 'side'>('unified')
 
+  /**
+   * ⚠️ 两种数据来源，优先级：记录自带的 raw > 版本对象。
+   * raw 是变更记录随记录下发的「确定的 before/after」，
+   * 不依赖版本号相邻推算，因此优先。
+   */
   const lines: JsonDiffLine[] = useMemo(() => {
+    if (raw) {
+      return diffJson(raw.before, raw.after)
+    }
     if (!before || !after) return []
     return diffJson(
       JSON.stringify(toComparable(before), null, 2),
       JSON.stringify(toComparable(after), null, 2),
     )
-  }, [before, after])
+  }, [raw, before, after])
 
   useEffect(() => { if (!open) setView('unified') }, [open])
 
-  if (!open || !after) return null
+  const hasContent = raw ? raw.after != null : after != null
+  if (!open || !hasContent) return null
 
   const stat = diffSummary(lines)
+  const title = raw
+    ? raw.label
+    : `${before ? `v${before.version}` : '（无）'} → v${after?.version} 配置对比`
 
   return (
     <Modal
@@ -292,12 +349,12 @@ function ConfigDiffModal({ open, onClose, before, after }: ConfigDiffModalProps)
       title={
         <Space wrap>
           <SwapOutlined />
-          <span>
-            {before ? `v${before.version}` : '（无）'} → v{after.version} 配置对比
-          </span>
-          <Tag color={after.publishedAt != null || after.published ? 'green' : 'orange'}>
-            {after.publishedAt != null || after.published ? '已发布' : '草稿'}
-          </Tag>
+          <span>{title}</span>
+          {!raw && (
+            <Tag color={after?.publishedAt != null || after?.published ? 'green' : 'orange'}>
+              {after?.publishedAt != null || after?.published ? '已发布' : '草稿'}
+            </Tag>
+          )}
           <Tag color="green">+{stat.added}</Tag>
           <Tag color="red">-{stat.removed}</Tag>
           <Tag color="gold">~{stat.changed}</Tag>
@@ -307,12 +364,20 @@ function ConfigDiffModal({ open, onClose, before, after }: ConfigDiffModalProps)
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
         <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {before
-              ? `对比基准：v${before.version}（${before.createdAt ? dayjs(before.createdAt).format('YYYY-MM-DD HH:mm') : '时间未知'}）`
-              : '对比基准：无（首个版本）'}
-            {' · '}
-            本版本：v{after.version}
-            {after.createdAt ? `（${dayjs(after.createdAt).format('YYYY-MM-DD HH:mm')}）` : ''}
+            {raw
+              ? (raw.before == null
+                ? '对比基准：无（首个版本，变更前不存在配置）'
+                : '对比基准：变更记录中保存的变更前配置')
+              : (before
+                ? `对比基准：v${before.version}（${before.createdAt ? dayjs(before.createdAt).format('YYYY-MM-DD HH:mm') : '时间未知'}）`
+                : '对比基准：无（首个版本）')}
+            {!raw && after && (
+              <>
+                {' · '}
+                本版本：v{after.version}
+                {after.createdAt ? `（${dayjs(after.createdAt).format('YYYY-MM-DD HH:mm')}）` : ''}
+              </>
+            )}
           </Typography.Text>
           <Segmented
             value={view}
@@ -329,7 +394,7 @@ function ConfigDiffModal({ open, onClose, before, after }: ConfigDiffModalProps)
         ) : view === 'unified' ? (
           <UnifiedDiff lines={lines} />
         ) : (
-          <SideBySideDiff lines={lines} before={before} after={after} />
+          <SideBySideDiff lines={lines} beforeLabel={raw ? '变更前' : `v${before?.version ?? '?'}（变更前）`} afterLabel={raw ? '变更后' : `v${after?.version ?? '?'}（变更后）`} />
         )}
       </Space>
     </Modal>
@@ -386,13 +451,13 @@ function UnifiedDiff({ lines }: { lines: JsonDiffLine[] }): JSX.Element {
 }
 
 function SideBySideDiff({
-  lines, before, after,
-}: { lines: JsonDiffLine[]; before: AgentDefinition | null; after: AgentDefinition }): JSX.Element {
+  lines, beforeLabel, afterLabel,
+}: { lines: JsonDiffLine[]; beforeLabel: string; afterLabel: string }): JSX.Element {
   return (
     <div style={{ display: 'flex', gap: 12 }}>
       <div style={{ flex: 1 }}>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {before ? `v${before.version}（变更前）` : '变更前'}
+          {beforeLabel}
         </Typography.Text>
         <DiffFrame>
           {lines.map((l) => (
@@ -409,7 +474,7 @@ function SideBySideDiff({
       </div>
       <div style={{ flex: 1 }}>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          v{after.version}（变更后）
+          {afterLabel}
         </Typography.Text>
         <DiffFrame>
           {lines.map((l) => (

@@ -103,7 +103,31 @@
                pr.reason            AS reason,
                pr.requester_id      AS actorId,
                pr.requested_at      AS requestedAt,
-               pr.applied_at        AS appliedAt
+               pr.applied_at        AS appliedAt,
+               -- after_config：本次申请里该 Agent 的完整配置（变更后）
+               (
+                   SELECT ag
+                   FROM jsonb_array_elements(
+                            CASE WHEN jsonb_typeof(pr.payload::jsonb -> 'agents') = 'array'
+                                 THEN pr.payload::jsonb -> 'agents'
+                                 ELSE '[]'::jsonb END) ag
+                   WHERE ag ->> 'agentId' = #{agentId}
+                   LIMIT 1
+               )::text             AS afterConfig,
+               -- before_config：基线版本（target_version 之前的最新版本）的完整配置（变更前）
+               --   ⚠️ 取 version < target_version 的最大版本，而不是 version = target_version-1：
+               --      版本号可能不连续（清理草稿后），-1 会取到不存在的行。
+               --   ⚠️ 无条件取『最高的更早版本』：一次发布可能跳号，语义仍是「这次改动之前的那份配置」。
+               CASE WHEN pr.target_version IS NULL THEN NULL
+                    ELSE (
+                        SELECT to_jsonb(d)
+                        FROM cap_agent_def d
+                        WHERE d.agent_id = #{agentId}::uuid
+                          AND d.version < pr.target_version
+                        ORDER BY d.version DESC
+                        LIMIT 1
+                    )::text
+               END                 AS beforeConfig
         FROM cap_config_publish_request pr
         WHERE EXISTS (
                   SELECT 1

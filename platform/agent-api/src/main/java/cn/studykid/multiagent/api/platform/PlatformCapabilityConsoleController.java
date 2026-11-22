@@ -635,11 +635,15 @@ public class PlatformCapabilityConsoleController {
                                  @Nullable String tenantId, @NonNull String action,
                                  @NonNull String state, @Nullable Integer targetVersion,
                                  @NonNull String reason, @NonNull String actorId,
-                                 @NonNull Instant requestedAt, @Nullable Instant appliedAt) {
+                                 @NonNull Instant requestedAt, @Nullable Instant appliedAt,
+                                 /** 变更前配置（JSON 文本）；首个版本或非配置类动作为 null。 */
+                                 @Nullable String beforeConfig,
+                                 /** 变更后配置（JSON 文本）；非配置类动作为 null。 */
+                                 @Nullable String afterConfig) {
         static AgentChangeDto of(PlatformAgentChange c) {
             return new AgentChangeDto(c.changeId(), c.category(), c.tenantId(), c.action(),
                     c.state(), c.targetVersion(), c.reason(), c.actorId(),
-                    c.requestedAt(), c.appliedAt());
+                    c.requestedAt(), c.appliedAt(), c.beforeConfig(), c.afterConfig());
         }
 
         /** 平台审计事件 → 变更记录（建行 / 分配 / 停用分配等直接配置动作）。 */
@@ -648,8 +652,10 @@ public class PlatformCapabilityConsoleController {
             String action = e.reasonCode() == null ? detail : e.reasonCode();
             Matcher matcher = AUDIT_TENANT.matcher(detail);
             String tenantId = matcher.find() ? matcher.group(1) : null;
+            // ⚠️ 审计类动作（建行 / 分配租户）没有配置变更，before/after 一律为 null ——
+            //    不臆造空对象，让前端能区分「没有配置差异」与「配置变成了空」。
             return new AgentChangeDto(e.id().toString(), "AUDIT", tenantId, action,
-                    "APPLIED", null, detail, e.actorId(), e.occurredAt(), null);
+                    "APPLIED", null, detail, e.actorId(), e.occurredAt(), null, null, null);
         }
     }
 

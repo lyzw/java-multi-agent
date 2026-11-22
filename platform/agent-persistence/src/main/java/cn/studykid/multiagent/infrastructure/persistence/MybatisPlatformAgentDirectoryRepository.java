@@ -59,7 +59,8 @@ public class MybatisPlatformAgentDirectoryRepository implements PlatformAgentDir
         return mapper.listAgentChanges(agentId, limit).stream()
                 .map(r -> new PlatformAgentChange(
                         r.changeId(), r.category(), r.tenantId(), r.action(), r.state(),
-                        r.targetVersion(), r.reason(), r.actorId(), r.requestedAt(), r.appliedAt()))
+                        r.targetVersion(), r.reason(), r.actorId(), r.requestedAt(), r.appliedAt(),
+                        r.beforeConfig(), r.afterConfig()))
                 .toList();
     }
 
