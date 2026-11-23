@@ -14,6 +14,7 @@ import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.LayoutBlock;
 import cn.studykid.rag.premise.model.PremiseBlock;
 import cn.studykid.rag.premise.normalize.SectionPathStack;
+import cn.studykid.rag.premise.normalize.TableGrid;
 
 /**
  * MinerU MiddleJson → {@link LayoutBlock} 映射（RAG-D26 阶段 1.2）。
@@ -184,6 +185,15 @@ public class MineruResponseMapper {
             }
         }
         String text = textBuf.toString();
+        // ⚠️ P1-5：MinerU 表格内容在 content[type=html] 的 <table> 里，不在 text 元素。
+        //    首版只拼 text 元素 → 表格整册退化成 [表格] 占位符。这里按真实 HTML 重建，
+        //    解析不出才保留占位符（fail-soft-but-honest）。
+        if (type.isTable()) {
+            TableGrid grid = TableContentExtractor.fromMineru(block);
+            if (grid != null) {
+                text = grid.toMarkdown();
+            }
+        }
         if (text.isBlank()) {
             text = LayoutPredicates.placeholderFor(type);
         }

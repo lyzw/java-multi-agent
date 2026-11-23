@@ -80,6 +80,18 @@ public enum BlockType {
     }
 
     /**
+     * 是否为表格块（P1-5 跨页表合并/表头判定的共享入口）。
+     *
+     * <p>⚠️ 同 {@link #isHeading()}：用实例方法而非 {@code type == BlockType.TABLE}，
+     * 避免消费方 classfile 持有枚举常量的 getstatic 引用（见类注释 JDK 21 缺陷）。
+     *
+     * @return 表格块返回 true
+     */
+    public boolean isTable() {
+        return this == TABLE;
+    }
+
+    /**
      * 是否为噪声块（页眉页脚、版权页等）。
      *
      * <p>⚠️ 噪声块<b>不进入片段库</b>——它既不承载知识，也会稀释检索信号。

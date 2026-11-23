@@ -14,6 +14,7 @@ import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.LayoutBlock;
 import cn.studykid.rag.premise.model.PremiseBlock;
 import cn.studykid.rag.premise.normalize.SectionPathStack;
+import cn.studykid.rag.premise.normalize.TableGrid;
 
 /**
  * Docling 响应 → {@link LayoutBlock} 映射（V1.0.2 T-4 / §4 Z5a）。
@@ -230,13 +231,17 @@ public class DoclingResponseMapper {
         if (text.isBlank() && type == BlockType.FORMULA) {
             text = node.path("orig").asText("");
         }
+        // ⚠️ P1-5：表格内容不在 `text` 里，而在 `data.table_cells[]`。
+        //    首版只读 text → 表格整册退化成 [表格] 占位符（表格内容 100% 丢失）。
+        //    这里按 Docling TableCell schema 真实重建；解析不出才保留占位符（fail-soft-but-honest）。
+        if (type.isTable()) {
+            TableGrid grid = TableContentExtractor.fromDocling(node);
+            if (grid != null) {
+                text = grid.toMarkdown();
+            }
+        }
         if (text.isBlank()) {
-            text = switch (type) {
-                case TABLE -> "[表格]";
-                case FIGURE -> "[图]";
-                case FORMULA -> "[公式]";
-                default -> "[空块]";
-            };
+            text = LayoutPredicates.placeholderFor(type);
         }
         String trimmed = text.trim();
 
