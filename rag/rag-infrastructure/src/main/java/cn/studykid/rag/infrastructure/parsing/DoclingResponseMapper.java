@@ -234,10 +234,11 @@ public class DoclingResponseMapper {
         // ⚠️ P1-5：表格内容不在 `text` 里，而在 `data.table_cells[]`。
         //    首版只读 text → 表格整册退化成 [表格] 占位符（表格内容 100% 丢失）。
         //    这里按 Docling TableCell schema 真实重建；解析不出才保留占位符（fail-soft-but-honest）。
+        TableGrid tableGrid = null;
         if (type.isTable()) {
-            TableGrid grid = TableContentExtractor.fromDocling(node);
-            if (grid != null) {
-                text = grid.toMarkdown();
+            tableGrid = TableContentExtractor.fromDocling(node);
+            if (tableGrid != null) {
+                text = tableGrid.toMarkdown();
             }
         }
         if (text.isBlank()) {
@@ -295,7 +296,7 @@ public class DoclingResponseMapper {
                 extractExerciseNo(trimmed), answerZone, start, end);
         // ⚠️ P1-3：bbox 来自 prov[0].bbox{l,t,r,b}，转成 [l,t,r,b]（原样 pt 坐标）。
         //    confidence 原始响应无此字段 → NaN（⛔ 不伪造），用 hasConfidence() 判定未知。
-        return new PremiseBlock(layout, extractBbox(prov), Double.NaN);
+        return new PremiseBlock(layout, extractBbox(prov), Double.NaN, tableGrid);
     }
 
     /**

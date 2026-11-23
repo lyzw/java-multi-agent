@@ -33,11 +33,27 @@ public final class TableGrid {
     /** 后端明确标注的表头行数；0 表示后端未标注（不伪造）。 */
     private final int headerRowCount;
 
+    /** MinerU {@code continues_prev}：本表是否续前页表格（Docling 无此字段，恒 false）。 */
+    private final boolean continuesPrev;
+
     /**
+     * 2 参 compat 构造（{@code continuesPrev=false}）。
+     *
      * @param rows            行×列的 cell 文本矩阵（每行至少 1 个 cell）
      * @param headerRowCount  后端标注的表头行数，须在 [0, rows.size()] 内
      */
     public TableGrid(@NonNull List<List<String>> rows, int headerRowCount) {
+        this(rows, headerRowCount, false);
+    }
+
+    /**
+     * 3 参全参构造（P1-5b）。
+     *
+     * @param rows            行×列的 cell 文本矩阵
+     * @param headerRowCount  后端标注的表头行数
+     * @param continuesPrev   是否续前页表格（MinerU continues_prev）
+     */
+    public TableGrid(@NonNull List<List<String>> rows, int headerRowCount, boolean continuesPrev) {
         if (rows == null) {
             throw new IllegalArgumentException("rows 不能为空");
         }
@@ -57,6 +73,7 @@ public final class TableGrid {
         }
         this.rows = List.copyOf(copy);
         this.headerRowCount = headerRowCount;
+        this.continuesPrev = continuesPrev;
     }
 
     /** @return 行矩阵（不可变） */
@@ -67,6 +84,11 @@ public final class TableGrid {
     /** @return 后端标注的表头行数（0 = 未标注） */
     public int headerRowCount() {
         return headerRowCount;
+    }
+
+    /** @return 是否续前页表格（MinerU continues_prev；Docling 恒 false） */
+    public boolean continuesPrev() {
+        return continuesPrev;
     }
 
     /** @return 行数 */

@@ -74,12 +74,31 @@ public final class NormalizationRules {
      */
     public static @NonNull List<PremiseBlock> normalize(
             @NonNull List<PremiseBlock> blocks, boolean pageBaseAlreadyOneBased) {
+        return normalize(blocks, pageBaseAlreadyOneBased, false);
+    }
+
+    /**
+     * 归一化唯一入口（含 P1-5b 跨页表合并开关）。
+     *
+     * <p>⚠️ 表格合并在四规则<b>之后</b>：它依赖已排好序、区间已修复、页眉已标噪的块序列
+     * （TableMerger 会跳过中间的 BOILERPLATE 噪声块）。默认关闭以保持既有契约，
+     * 生产接线时显式开启。
+     *
+     * @param blocks                     输入块
+     * @param pageBaseAlreadyOneBased    页码是否已 1 基
+     * @param mergeTables                是否执行跨页表合并/超长表切片
+     * @return 归一化后的新序列
+     */
+    public static @NonNull List<PremiseBlock> normalize(
+            @NonNull List<PremiseBlock> blocks, boolean pageBaseAlreadyOneBased,
+            boolean mergeTables) {
         List<PremiseBlock> out = pageBaseAlreadyOneBased
                 ? new ArrayList<>(blocks)
                 : shiftPageNumbers(blocks);
         out = ensureReadingOrder(out);
         out = renumberBrokenCharSpans(out);
-        return markRepeatedLineNoise(out);
+        out = markRepeatedLineNoise(out);
+        return mergeTables ? TableMerger.merge(out) : out;
     }
 
     /** 重复行被判为页眉页脚的最短出现页数（与脚本 {@code max(3, pages//3)} 对应）。 */
@@ -215,7 +234,7 @@ public final class NormalizationRules {
         LayoutBlock moved = new LayoutBlock(raw.type(), raw.text(), newPage, raw.headingLevel(),
                 raw.sectionPath(), raw.exerciseNo(), raw.inAnswerZone(),
                 raw.charStart(), raw.charEnd());
-        return new PremiseBlock(moved, b.pageBbox(), b.confidence());
+        return new PremiseBlock(moved, b.pageBbox(), b.confidence(), b.tableGrid());
     }
 
     private static PremiseBlock withType(PremiseBlock b, BlockType newType) {
@@ -223,7 +242,7 @@ public final class NormalizationRules {
         LayoutBlock tagged = new LayoutBlock(newType, raw.text(), raw.pageNumber(),
                 raw.headingLevel(), raw.sectionPath(), raw.exerciseNo(), raw.inAnswerZone(),
                 raw.charStart(), raw.charEnd());
-        return new PremiseBlock(tagged, b.pageBbox(), b.confidence());
+        return new PremiseBlock(tagged, b.pageBbox(), b.confidence(), b.tableGrid());
     }
 
     private static PremiseBlock rebuildWithSpan(PremiseBlock b, int charStart, int charEnd) {
@@ -231,6 +250,6 @@ public final class NormalizationRules {
         LayoutBlock respanned = new LayoutBlock(raw.type(), raw.text(), raw.pageNumber(),
                 raw.headingLevel(), raw.sectionPath(), raw.exerciseNo(), raw.inAnswerZone(),
                 charStart, charEnd);
-        return new PremiseBlock(respanned, b.pageBbox(), b.confidence());
+        return new PremiseBlock(respanned, b.pageBbox(), b.confidence(), b.tableGrid());
     }
 }

@@ -6,6 +6,7 @@ import org.jspecify.annotations.NonNull;
 
 import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.LayoutBlock;
+import cn.studykid.rag.premise.normalize.TableGrid;
 
 /**
  * 归一化版面块（RAG-D26 §1.3）。
@@ -38,13 +39,33 @@ public final class PremiseBlock {
     private final LayoutBlock layout;
     private final double[] pageBbox;
     private final double confidence;
+    /** P1-5：表格块的结构化网格（非表格块为 null）。跨页合并/表头继承的数据源。 */
+    private final TableGrid tableGrid;
 
     /**
+     * 3 参 compat 构造（既有调用方零改；表格网格为 null）。
+     *
      * @param layout     被包装的既有端口块（权威数据源，不可为空）
      * @param pageBbox   页内几何框 [x0,y0,x1,y1]（可为 null）
      * @param confidence 后端置信度（未知传 {@link Double#NaN}）
      */
     public PremiseBlock(@NonNull LayoutBlock layout, double[] pageBbox, double confidence) {
+        this(layout, pageBbox, confidence, null);
+    }
+
+    /**
+     * 4 参全参构造（P1-5）：表格块由 mapper 传入真实网格。
+     *
+     * <p>⚠️ 铁律 #8：compat 构造新增字段后，所有转换路径必须<b>逐字段带过</b>，
+     * 否则归一化重排时表格网格被静默清空 → 跨页合并空转（见 NormalizationRules）。
+     *
+     * @param layout     被包装的既有端口块
+     * @param pageBbox   页内几何框（可为 null）
+     * @param confidence 后端置信度
+     * @param tableGrid  表格网格（仅 TABLE 块有值，其余传 null）
+     */
+    public PremiseBlock(@NonNull LayoutBlock layout, double[] pageBbox, double confidence,
+                        TableGrid tableGrid) {
         if (layout == null) {
             throw new IllegalArgumentException("layout 不能为空");
         }
@@ -55,6 +76,7 @@ public final class PremiseBlock {
         }
         this.pageBbox = pageBbox == null ? null : pageBbox.clone();
         this.confidence = confidence;
+        this.tableGrid = tableGrid;
     }
 
     /**
@@ -145,5 +167,28 @@ public final class PremiseBlock {
     /** @return 后端是否提供了置信度 */
     public boolean hasConfidence() {
         return !Double.isNaN(confidence);
+    }
+
+    /** @return 表格网格（非表格块或结构缺失为 null） */
+    public TableGrid tableGrid() {
+        return tableGrid;
+    }
+
+    /** @return 是否为携带结构化网格的表格块 */
+    public boolean hasTableGrid() {
+        return tableGrid != null;
+    }
+
+    /**
+     * 用新的 LayoutBlock + 表格网格重建本块（P1-5 跨页合并/切片后产出新块用）。
+     *
+     * <p>⚠️ 铁律 #8：几何/置信度/网格<b>全部逐字段带过</b>，不静默清空。
+     *
+     * @param newLayout  新的版面块（text/char 区间已按合并结果重算）
+     * @param newGrid    新的表格网格（切片后为该片的网格）
+     * @return 重建的块
+     */
+    public @NonNull PremiseBlock withTable(@NonNull LayoutBlock newLayout, TableGrid newGrid) {
+        return new PremiseBlock(newLayout, pageBbox, confidence, newGrid);
     }
 }

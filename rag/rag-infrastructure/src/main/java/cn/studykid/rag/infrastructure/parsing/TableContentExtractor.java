@@ -140,11 +140,18 @@ public final class TableContentExtractor {
         if (html == null) {
             return null;
         }
-        return parseHtmlTable(html);
+        // ⚠️ P1-5b：MinerU 显式给出 continues_prev（跨页续表信号，D26 §1.2 实测字段）。
+        boolean continuesPrev = block.path("continues_prev").asBoolean(false);
+        return parseHtmlTable(html, continuesPrev);
     }
 
     /** 轻量 HTML 表格解析（无第三方依赖，免引入 Jsoup）。 */
     static TableGrid parseHtmlTable(String html) {
+        return parseHtmlTable(html, false);
+    }
+
+    /** 轻量 HTML 表格解析（带跨页续表信号）。 */
+    static TableGrid parseHtmlTable(String html, boolean continuesPrev) {
         if (html == null) {
             return null;
         }
@@ -186,7 +193,7 @@ public final class TableContentExtractor {
             return null;
         }
         int headerRows = firstRowAllHeaderCells(body) ? 1 : 0;
-        return new TableGrid(grid, headerRows);
+        return new TableGrid(grid, headerRows, continuesPrev);
     }
 
     /** 首行（第一个 tr）是否全部由 <th> 组成——MinerU 的表头信号。 */

@@ -188,10 +188,11 @@ public class MineruResponseMapper {
         // ⚠️ P1-5：MinerU 表格内容在 content[type=html] 的 <table> 里，不在 text 元素。
         //    首版只拼 text 元素 → 表格整册退化成 [表格] 占位符。这里按真实 HTML 重建，
         //    解析不出才保留占位符（fail-soft-but-honest）。
+        TableGrid tableGrid = null;
         if (type.isTable()) {
-            TableGrid grid = TableContentExtractor.fromMineru(block);
-            if (grid != null) {
-                text = grid.toMarkdown();
+            tableGrid = TableContentExtractor.fromMineru(block);
+            if (tableGrid != null) {
+                text = tableGrid.toMarkdown();
             }
         }
         if (text.isBlank()) {
@@ -236,7 +237,7 @@ public class MineruResponseMapper {
                 LayoutPredicates.extractExerciseNo(trimmed), answerZone, start, end);
         // ⚠️ P1-3：bbox 原样保留（MinerU 实测为 0-1 归一化四元组）；
         //    confidence 仅当后端真给字段才赋值——实测无此字段，保持 NaN（hasConfidence=false）。
-        return new PremiseBlock(layout, extractBbox(block), extractConfidence(block));
+        return new PremiseBlock(layout, extractBbox(block), extractConfidence(block), tableGrid);
     }
 
     /**
