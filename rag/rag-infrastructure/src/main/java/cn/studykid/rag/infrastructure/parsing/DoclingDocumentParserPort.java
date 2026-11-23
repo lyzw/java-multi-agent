@@ -208,9 +208,15 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
             log.debug("[RAG] Docling 解析 documentId={} bytes={} 页数={} → 整册提交",
                     documentId, content.length, totalPages);
             String raw = callDocling(documentId, content, 1, totalPages);
-            List<LayoutBlock> blocks = mapper.map(raw);
+            // ⚠️ P1-3：一次映射同时产出带几何 PremiseBlock 与兼容用 LayoutBlock
+            //    （同一次 mapToPremiseBlocks，恒等解包，杜绝两次映射口径漂移）。
+            List<cn.studykid.rag.premise.model.PremiseBlock> premiseBlocks =
+                    mapper.mapToPremiseBlocks(raw);
+            List<LayoutBlock> blocks = premiseBlocks.stream()
+                    .map(cn.studykid.rag.premise.model.PremiseBlock::toLayoutBlock)
+                    .toList();
             return new ParseWithRaw(documentId, blocks,
-                    mapper.extractJsonContent(raw), true);
+                    mapper.extractJsonContent(raw), true, premiseBlocks);
         }
 
         // ② 大册：按页段提交并合并
@@ -298,7 +304,17 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
             @NonNull String documentId,
             @NonNull List<LayoutBlock> blocks,
             String rawJson,
-            boolean wholeDocument) {
+            boolean wholeDocument,
+            @NonNull List<cn.studykid.rag.premise.model.PremiseBlock> premiseBlocks) {
+
+        /** 四参兼容构造（P1-3 前调用点 / 测试桩）：几何未知，按无几何块包装。 */
+        public ParseWithRaw(@NonNull String documentId,
+                            @NonNull List<LayoutBlock> blocks,
+                            String rawJson,
+                            boolean wholeDocument) {
+            this(documentId, blocks, rawJson, wholeDocument,
+                    cn.studykid.rag.premise.model.PremiseBlock.fromLayoutBlocks(blocks));
+        }
 
         /**
          * @return 本结果对应的 ParsedDocument

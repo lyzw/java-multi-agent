@@ -86,21 +86,26 @@ public class DoclingPremiseBackend implements DocumentParseBackend {
         //    不再一一对应，item_refs 会错位）——此处只透传，由 HybridChunkerClient
         //    在 doclingJsonRef 为空/不可信时 fail-closed。
         String rawJson = result.wholeDocument() ? result.rawJson() : null;
+        List<String> warnings = new java.util.ArrayList<>();
+        if (rawJson == null) {
+            warnings.add("chunk-bridge 数据流前提缺失：doclingJsonRef 不可用"
+                    + "（分段解析或非 Docling 委托），HYBRID_CHUNKER 将 fail-closed");
+        }
+        // ⚠️ P1-3：整册单响应时 premiseBlocks 带真实 bbox；分段/非 Docling 委托路径
+        //    几何未知（兼容构造包成无几何块）——如实留痕，不用空框冒充。
+        List<PremiseBlock> premiseBlocks = result.premiseBlocks();
+        long bboxCount = premiseBlocks.stream().filter(PremiseBlock::hasBbox).count();
+        if (bboxCount == 0) {
+            warnings.add("Docling 响应无块级 bbox 或走分段合并：几何引用回取不可用（不伪造空框）");
+        }
         ParseTrace trace = new ParseTrace(
                 backendId(),
                 backendVersion,
                 maxPageOf(parsed),
                 !result.wholeDocument(),
                 1,
-                rawJson == null
-                        ? List.of("chunk-bridge 数据流前提缺失：doclingJsonRef 不可用"
-                                + "（分段解析或非 Docling 委托），HYBRID_CHUNKER 将 fail-closed")
-                        : List.of());
-        return new PremiseDocument(
-                documentId,
-                PremiseBlock.fromLayoutBlocks(parsed.blocks()),
-                trace,
-                rawJson);
+                warnings);
+        return new PremiseDocument(documentId, premiseBlocks, trace, rawJson);
     }
 
     private static int maxPageOf(ParsedDocument parsed) {

@@ -12,6 +12,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.LayoutBlock;
+import cn.studykid.rag.premise.model.PremiseBlock;
 
 /**
  * Docling 响应 → {@link LayoutBlock} 映射（V1.0.2 T-4 / §4 Z5a）。
@@ -99,7 +100,24 @@ public class DoclingResponseMapper {
      * @return 块序列（按阅读顺序）
      * @throws DoclingDocumentParserPort.DoclingUnavailableException 响应缺字段或解析失败
      */
+    /**
+     * 既有契约：映射为无扩展信息的块序列（供 {@code DocumentParserPort} 与既有测试使用）。
+     * 委托给 {@link #mapToPremiseBlocks} 后恒等解包，两条路径共用同一份语义计算。
+     */
     public List<LayoutBlock> map(String responseBody) {
+        return mapToPremiseBlocks(responseBody).stream()
+                .map(PremiseBlock::toLayoutBlock)
+                .toList();
+    }
+
+    /**
+     * P1-3（RAG-D28）：映射为<b>带几何</b>的归一化块序列。
+     *
+     * <p>bbox 来自 Docling 实测字段 {@code prov[0].bbox{l,t,r,b}}，转成
+     * {@code [l,t,r,b]} 四元组（原样保留 pt 坐标系）。confidence 原始响应无此字段，
+     * 保持 {@code NaN}（⛔ 不伪造数据）。
+     */
+    public List<PremiseBlock> mapToPremiseBlocks(String responseBody) {
         JsonNode root;
         try {
             root = mapper.readTree(responseBody);
@@ -145,7 +163,7 @@ public class DoclingResponseMapper {
         Set<String> repeatedShortLines = findRepeatedShortLines(jsonContent);
 
         // ③ 按 body.children 的 $ref 顺序生成块（阅读顺序的唯一权威来源）
-        List<LayoutBlock> out = new ArrayList<>();
+        List<PremiseBlock> out = new ArrayList<>();
         int charCursor = 0;
         StringBuilder sectionPath = new StringBuilder();
         // ⚠️⚠️ 答案区是**跨块状态**，不是单块属性：
@@ -162,7 +180,7 @@ public class DoclingResponseMapper {
             // ⚠️ groups 是「组」而非内容块（如列表容器），其内部 children 需展开。
             if (ref.startsWith("#/groups/")) {
                 for (JsonNode grand : child.path("children")) {
-                    LayoutBlock b = toBlock(grand.path("$ref").asText(""), byRef, typeByRef,
+                    PremiseBlock b = toBlock(grand.path("$ref").asText(""), byRef, typeByRef,
                             charCursor, sectionPath, inAnswerZone, repeatedShortLines);
                     if (b != null) {
                         out.add(b);
@@ -171,7 +189,7 @@ public class DoclingResponseMapper {
                 }
                 continue;
             }
-            LayoutBlock block = toBlock(ref, byRef, typeByRef, charCursor, sectionPath,
+            PremiseBlock block = toBlock(ref, byRef, typeByRef, charCursor, sectionPath,
                     inAnswerZone, repeatedShortLines);
             if (block != null) {
                 out.add(block);
@@ -195,10 +213,10 @@ public class DoclingResponseMapper {
      * @param sectionPath 章节路径（会被标题块推进）
      * @return 块；该 ref 无内容时返回 null
      */
-    private LayoutBlock toBlock(String ref, Map<String, JsonNode> byRef,
-                                Map<String, BlockType> typeByRef, int charCursor,
-                                StringBuilder sectionPath, boolean[] inAnswerZone,
-                                Set<String> repeatedShortLines) {
+    private PremiseBlock toBlock(String ref, Map<String, JsonNode> byRef,
+                                 Map<String, BlockType> typeByRef, int charCursor,
+                                 StringBuilder sectionPath, boolean[] inAnswerZone,
+                                 Set<String> repeatedShortLines) {
         JsonNode node = byRef.get(ref);
         if (node == null) {
             return null;
@@ -302,8 +320,35 @@ public class DoclingResponseMapper {
         LayoutPredicates.advanceAnswerZone(type, trimmed, inAnswerZone);
         boolean answerZone = inAnswerZone[0];
 
-        return new LayoutBlock(type, trimmed, page, level, section,
+        LayoutBlock layout = new LayoutBlock(type, trimmed, page, level, section,
                 extractExerciseNo(trimmed), answerZone, start, end);
+        // ⚠️ P1-3：bbox 来自 prov[0].bbox{l,t,r,b}，转成 [l,t,r,b]（原样 pt 坐标）。
+        //    confidence 原始响应无此字段 → NaN（⛔ 不伪造），用 hasConfidence() 判定未知。
+        return new PremiseBlock(layout, extractBbox(prov), Double.NaN);
+    }
+
+    /**
+     * P1-3：解析 Docling 块级 bbox（{@code prov[0].bbox{l,t,r,b}} → {@code [l,t,r,b]}）。
+     *
+     * <p>⚠️ 缺字段/缺任一坐标/非数值时返回 {@code null}（={@code hasBbox()==false}），
+     * <b>不得</b>用 {@code [0,0,0,0]} 冒充——空框会让引用回看定位到页面左上角。
+     */
+    static double[] extractBbox(JsonNode prov) {
+        if (prov == null || !prov.isArray() || prov.isEmpty()) {
+            return null;
+        }
+        JsonNode bbox = prov.get(0).path("bbox");
+        if (!bbox.isObject()) {
+            return null;
+        }
+        JsonNode l = bbox.path("l");
+        JsonNode t = bbox.path("t");
+        JsonNode r = bbox.path("r");
+        JsonNode b = bbox.path("b");
+        if (!l.isNumber() || !t.isNumber() || !r.isNumber() || !b.isNumber()) {
+            return null;
+        }
+        return new double[]{l.asDouble(), t.asDouble(), r.asDouble(), b.asDouble()};
     }
 
     /**

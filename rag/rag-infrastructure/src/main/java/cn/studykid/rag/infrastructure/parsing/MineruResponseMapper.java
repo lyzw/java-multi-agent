@@ -12,6 +12,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.LayoutBlock;
+import cn.studykid.rag.premise.model.PremiseBlock;
 
 /**
  * MinerU MiddleJson → {@link LayoutBlock} 映射（RAG-D26 阶段 1.2）。
@@ -78,7 +79,30 @@ public class MineruResponseMapper {
      * @return 块序列（按阅读顺序；页码已 +1 换算为 1 基）
      * @throws MineruUnavailableException 响应缺字段 / schema 不符 / 产出 0 块
      */
+    /**
+     * 既有契约：映射为无扩展信息的块序列（供 {@code DocumentParserPort} 与既有测试使用）。
+     *
+     * <p>⚠️ 本方法委托给 {@link #mapToPremiseBlocks}，再恒等解包为 {@link LayoutBlock}——
+     * 两条路径共用同一份语义计算（页码换算/页眉降级/答案区/章节路径/字符区间），
+     * 杜绝「带几何」与「不带几何」两套口径漂移。
+     */
     public List<LayoutBlock> map(String documentId, String middleJson) {
+        return mapToPremiseBlocks(documentId, middleJson).stream()
+                .map(PremiseBlock::toLayoutBlock)
+                .toList();
+    }
+
+    /**
+     * P1-3（RAG-D28）：映射为<b>带几何</b>的归一化块序列。
+     *
+     * <p>bbox 来自 MinerU MiddleJson 实测字段 {@code blocks[].bbox}（0-1 归一化坐标，
+     * 原样保留，不换算到 pt——与 D27 §4.2「后端坐标系原样保留」一致）。
+     * confidence 仅当后端真给了 {@code confidence} 字段才赋值，否则 {@code NaN}
+     * （⛔ 不伪造数据：实测响应无此字段时，用 hasConfidence() 判定为「未知」）。
+     *
+     * @return 带几何的块序列（阅读顺序；页码已 +1）
+     */
+    public List<PremiseBlock> mapToPremiseBlocks(String documentId, String middleJson) {
         JsonNode root;
         try {
             root = mapper.readTree(middleJson);
@@ -103,7 +127,7 @@ public class MineruResponseMapper {
         Set<String> repeatedShortLines = findRepeatedShortLines(pages);
 
         // ③ 按页序 + 块序生成块（阅读顺序权威来源）
-        List<LayoutBlock> out = new ArrayList<>();
+        List<PremiseBlock> out = new ArrayList<>();
         int charCursor = 0;
         StringBuilder sectionPath = new StringBuilder();
         // ⚠️ 标题栈：与 Docling mapper 的 replaceAtLevel 同语义
@@ -124,7 +148,7 @@ public class MineruResponseMapper {
             int page1 = pageIdx + 1;
 
             for (JsonNode block : page.path("blocks")) {
-                LayoutBlock b = toBlock(block, page1, charCursor, sectionPath,
+                PremiseBlock b = toBlock(block, page1, charCursor, sectionPath,
                         pathLevels, pathTitles, inAnswerZone, repeatedShortLines);
                 if (b != null) {
                     out.add(b);
@@ -142,10 +166,10 @@ public class MineruResponseMapper {
     /**
      * 单块 → LayoutBlock。
      */
-    private LayoutBlock toBlock(JsonNode block, int page1, int charCursor,
-                                StringBuilder sectionPath,
-                                List<Integer> pathLevels, List<String> pathTitles,
-                                boolean[] inAnswerZone, Set<String> repeatedShortLines) {
+    private PremiseBlock toBlock(JsonNode block, int page1, int charCursor,
+                                 StringBuilder sectionPath,
+                                 List<Integer> pathLevels, List<String> pathTitles,
+                                 boolean[] inAnswerZone, Set<String> repeatedShortLines) {
         String rawType = block.path("type").asText("");
         BlockType type = mapBlockType(rawType);
         // content 数组：只拼 text 元素（image_body 等视觉元素无文本）
@@ -199,8 +223,42 @@ public class MineruResponseMapper {
 
         int start = charCursor;
         int end = start + trimmed.length();
-        return new LayoutBlock(type, trimmed, page1, level, section,
+        LayoutBlock layout = new LayoutBlock(type, trimmed, page1, level, section,
                 LayoutPredicates.extractExerciseNo(trimmed), answerZone, start, end);
+        // ⚠️ P1-3：bbox 原样保留（MinerU 实测为 0-1 归一化四元组）；
+        //    confidence 仅当后端真给字段才赋值——实测无此字段，保持 NaN（hasConfidence=false）。
+        return new PremiseBlock(layout, extractBbox(block), extractConfidence(block));
+    }
+
+    /**
+     * P1-3：解析 MinerU 块级 bbox（{@code [x0,y0,x1,y1]}，原样保留）。
+     *
+     * <p>⚠️ fail-soft-but-honest：字段缺失/长度非 4/含非数值时返回 {@code null}
+     * （={@code hasBbox()==false}），<b>不得</b>用 {@code [0,0,0,0]} 冒充——
+     * 空框会被下游当作「几何有效」，让引用回看定位到页面左上角（P1-3 反证点）。
+     */
+    static double[] extractBbox(JsonNode block) {
+        JsonNode bbox = block.path("bbox");
+        if (!bbox.isArray() || bbox.size() != 4) {
+            return null;
+        }
+        double[] out = new double[4];
+        for (int i = 0; i < 4; i++) {
+            JsonNode v = bbox.get(i);
+            if (!v.isNumber()) {
+                return null;
+            }
+            out[i] = v.asDouble();
+        }
+        return out;
+    }
+
+    /**
+     * P1-3：解析块级置信度。后端未提供时返回 {@code NaN}（⛔ 不伪造）。
+     */
+    static double extractConfidence(JsonNode block) {
+        JsonNode conf = block.path("confidence");
+        return conf.isNumber() ? conf.asDouble() : Double.NaN;
     }
 
     /**

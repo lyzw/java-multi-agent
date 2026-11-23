@@ -20,7 +20,6 @@ import tools.jackson.databind.JsonNode;
 
 import cn.studykid.rag.infrastructure.parsing.MineruResponseMapper;
 import cn.studykid.rag.infrastructure.parsing.MineruResponseMapper.MineruUnavailableException;
-import cn.studykid.rag.ports.LayoutBlock;
 import cn.studykid.rag.premise.model.ParseTrace;
 import cn.studykid.rag.premise.model.PremiseBlock;
 import cn.studykid.rag.premise.model.PremiseDocument;
@@ -127,17 +126,24 @@ public class MineruPremiseBackend implements DocumentParseBackend {
         String resultUrl = pollUntilDone(documentId, taskId);
         // ③ 下载 ZIP 并取 middle_json.json
         String middleJson = downloadMiddleJson(documentId, resultUrl);
-        // ④ 映射（含 0 基页码 +1 换算与四项 Java 侧计算）
-        List<LayoutBlock> blocks = mapper.map(documentId, middleJson);
+        // ④ 映射（含 0 基页码 +1 换算与四项 Java 侧计算）——P1-3：直接产出带几何的
+        //    PremiseBlock（bbox 真实赋值；confidence 无源保持 NaN，不伪造）。
+        List<PremiseBlock> blocks = mapper.mapToPremiseBlocks(documentId, middleJson);
         // 版本号从响应取（映射器不回传，这里从 middle_json 再读一次——
         // 更优做法是 mapper 连同版本一起返回，见 trace 组装）
         String version = extractProducerVersion(middleJson);
+        long bboxCount = blocks.stream().filter(PremiseBlock::hasBbox).count();
+        // ⚠️ 诚实留痕：confidence 后端无字段（hasConfidence 恒 false），不伪造数值；
+        //    bbox 有值时写入告警位，供可观测性核对「几何真实赋值」是否生效。
+        List<String> warnings = bboxCount == 0
+                ? List.of("MinerU 响应无块级 bbox：几何引用回取不可用（不伪造空框）")
+                : List.of();
         ParseTrace trace = new ParseTrace(backendId(), version,
-                blocks.stream().mapToInt(LayoutBlock::pageNumber).max().orElse(0),
-                false, 1, List.of());
-        log.info("[RAG] MinerU 解析完成 documentId={} 页数={} 块数={} tier={} version={}",
-                documentId, trace.pageCount(), blocks.size(), tier, version);
-        return new PremiseDocument(documentId, PremiseBlock.fromLayoutBlocks(blocks), trace);
+                blocks.stream().mapToInt(PremiseBlock::pageNumber).max().orElse(0),
+                false, 1, warnings);
+        log.info("[RAG] MinerU 解析完成 documentId={} 页数={} 块数={} 带bbox={} tier={} version={}",
+                documentId, trace.pageCount(), blocks.size(), bboxCount, tier, version);
+        return new PremiseDocument(documentId, blocks, trace);
     }
 
     // ---------- Tasks API 三步 ----------
