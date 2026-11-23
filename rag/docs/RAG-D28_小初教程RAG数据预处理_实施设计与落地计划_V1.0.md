@@ -40,13 +40,17 @@ D27 的**主线方向正确**（版面解析 + 教学语义归一化 + 父子块
 
 | 批 3 | **P1-3** IR 三件套落地 | ✅ | ① `bbox` 真实赋值：两个 mapper 新增 `mapToPremiseBlocks()`，Docling `prov[0].bbox{l,t,r,b}` / MinerU `bbox`（0-1 原样）流入 `PremiseBlock`；`map()` 委托它恒等解包（既有测试零改）。**confidence 原始响应无字段 → 恒 NaN（⛔ 不伪造）**，`hasBbox()/hasConfidence()` 判未知。② `PremiseDocument` 补 `markdownRef`/`pageCacheRef`（4 参/3 参 compat 构造逐字段带过 doclingJsonRef）+ `withArtifacts`。③ 新增 `IntermediateRepresentation`/`PremiseIrRenderer`（Markdown+JSON 同源、BOILERPLATE 剔除、严格转义、bbox 缺失输出 null）+ `retrieveOriginal`（char 区间切片，越界抛错）；`PremiseArtifactSink` SPI + `ObjectStorePremiseArtifactSink`（复用 ObjectStorePort，键空间 `premise/` 隔离、路径穿越拒绝、fail-closed）+ `PremiseArtifactWriter`（渲染→落盘→回填一步）。`ParseWithRaw` 加 5 参 `premiseBlocks`（整册带几何、分段兼容构造诚实无几何）。GeometryAssignmentTest 8 + PremiseIrRendererTest 6 + PremiseArtifactWriterTest 3 + ObjectStorePremiseArtifactSinkTest 4 全绿。**两次撤点反证**：伪造空框 `[0,0,0,0]` → bbox 测试转红；空回取 → 20/20 转红；恢复+clean 重建全绿 |
 
+| 批 4 | **P1-4** 归一化收敛（分隔符 / mapper 去重 / 唯一入口） | ✅ | ① 新建 `SectionPathStack`（`rag-premise/normalize`）——章节路径**唯一状态机**，持有 `SEPARATOR=" > "`、MAX_DEPTH=3、level 值栈替换/变浅弹出/跨页新分区/页眉剥除。② 两个 mapper 删除各自的 `replaceAtLevel` 副本（Docling 4 个跨块状态字段、MinerU 静态副本），统一委托共享栈；`LayoutPredicates.stripPageHeaderSuffix` 也委托它（正则单源）。③ `SectionPathResolver` 由自带「level-1 截断」算法改为共享栈门面，`HeadingHierarchyChunker`/`IngestionPipeline` 改持 `SectionPathStack`——消除「mapper 算对、切分器再算错覆盖」的隐藏漂移（铁律 #15）。④ `NormalizationRules.normalize(blocks, pageBaseAlreadyOneBased)` 成唯一入口，四规则按「页码→排序→区间→噪声」安全顺序串联。`SectionPathStackTest` 10 + `SectionPathParityTest` 4 + `NormalizationRulesTest` 新增 2 全绿。**两次撤点反证**：分隔符改回 `" / "` → 5 例转红；mapper 单独漂移 `" / "` → parity 2 例转红；恢复+clean 重建全绿 |
+
+> **实现决策（批 4）**：P1-4 前「标题→章节路径」有三份实现，已确认两处真实漂移：分隔符（mapper `" / "` vs resolver/规范 `" > "`）与非连续 level（mapper 值栈正确处理 1,2,3,5，resolver 的 level-1 截断会错位）。更隐蔽的是下游切分器用自己算法重新推进，把 mapper 的正确结果覆盖——「算对了但被改写」。本批把状态机收敛为一份；**页眉剥除正则也一并单源化**（`LayoutPredicates` 委托 `SectionPathStack.stripHeaderSuffix`）。`normalize()` 不含章节路径：路径是跨块累积状态机，不能做无状态批量变换；页码换算需调用方声明「是否已 1 基」，mapper 已适配阶段 +1，传错会整体错位一页。
+>
 > **实现决策（批 2）**：路由信号从 primary（轻量）**已解析块**推导（`PageSignals.of`），不二次解析 PDF 字节——「先用便宜路径」的零额外成本落点；升级后端只在存在 HEAVY 页时调用一次整册。混合后端时强制清空 `doclingJsonRef`，避免 `HybridChunkerClient` 拿过期 Docling JSON 切出错位块。阈值 `RoutingConfig.productionDefault()` 是**初始工程值**，须在真实教材基准集上标定（D08 SG-2），不得为让某册通过而临时放水。
 >
 > **实现决策（批 3）**：confidence **不做伪造赋值**——Docling/MinerU 实测响应都无块级置信度字段，`hasConfidence()` 恒 false 是诚实结论；D27 §4.2 示例里的 0.97 是示意值，非生产可得。样本响应 `sample-response.json` 的 `prov` 也被裁剪得只剩 `page_no`，故 bbox 赋值测试用带 bbox 的手工响应夹具。落盘能力（`PremiseArtifactSink`/`Writer`）已就位并装配为 Spring bean，但见下方**可达性缺口**。
 >
 > ⚠️ **运行期可达性缺口（批 3 发现，D09 G1 前必须解决）**：生产摄取链是 `IngestJobOrchestrator → IngestionPipeline.ingest()`，其 premise 分支走 `PremiseDocument.fromParsed(documentId, parsed)`——而 `parsed` 来自 `DocumentParserPort`（只有 `LayoutBlock`），**不经过 `PremisePreprocessor`/`RoutingParseBackend`，也不会带 mapper 的 bbox 几何**。即批 1~3 的路由、质量分、几何、IR 落盘能力目前均为「已实现+已装配为 bean，但生产摄取链未调用」。这是项目铁律 #15 警示的空转风险。解决路径：阶段 3 premise 管线接线时，把 `IngestJobOrchestrator` 的解析+切分段从 `IngestionPipeline` 切到 `PremisePreprocessor`（或让 `IngestionPipeline` 注入 `DocumentParseBackend`+`PremiseArtifactWriter`），属跨阶段门禁 G1 的系统性改造，不在单批内草率接通。**在接线+真实语料端到端通过前，不宣称 P1 阶段完成。**
 >
-> **下一步**：批 4 从 P1-4（归一化收敛：`NormalizationRules` 成唯一入口、mapper 去重、分隔符统一 `>`）切入；P0-4/P0-5 并行等待数据授权与标注资源。
+> **下一步**：批 5 从 P1-5（跨页表合并：表体合并、表头继承、切片重复表头；TEDS 基准）切入；P0-4/P0-5 并行等待数据授权与标注资源。⚠️ 生产摄取链可达性缺口（批 3 记录）仍未关闭——P1-1~P1-4 能力均已实现并装配/委托，但 `IngestJobOrchestrator → IngestionPipeline.ingest()` 的 premise 分支仍走 `PremiseDocument.fromParsed()`，不经 `PremisePreprocessor`/`RoutingParseBackend`；G1 前须系统性接线，接线+真实语料端到端通过前不宣称 P1 完成。
 
 ### 0.2 三类读者怎么读
 

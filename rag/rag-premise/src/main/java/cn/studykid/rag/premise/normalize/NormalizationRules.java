@@ -48,6 +48,40 @@ public final class NormalizationRules {
     private NormalizationRules() {
     }
 
+    /**
+     * 归一化<b>唯一入口</b>（RAG-D28 P1-4）：把四条规则按安全顺序串成一次调用。
+     *
+     * <p><b>⚠️ 顺序不可换</b>：
+     * <ol>
+     *   <li>{@link #shiftPageNumbers}——先统一页码基准（0 基后端 +1）；</li>
+     *   <li>{@link #ensureReadingOrder}——再稳定排序，后续规则依赖阅读顺序；</li>
+     *   <li>{@link #renumberBrokenCharSpans}——按排好序的页内顺序修复区间；</li>
+     *   <li>{@link #markRepeatedLineNoise}——最后基于完整块集统计跨页重复行。</li>
+     * </ol>
+     *
+     * <p><b>⚠️ 页码基准的调用方纪律</b>：{@code shiftPageNumbers} 只对<b>尚未换算</b>的
+     * 0 基后端块生效。Docling/MinerU mapper 已在适配阶段完成 +1（MinerU
+     * {@code pageIdx+1}），因此生产链路调用本入口时传 {@code pageBaseAlreadyOneBased=true}
+     * 跳过该步；只有直读 0 基原始输出的适配器才传 false。传错会整体页码 +1（引用错位）。
+     *
+     * <p><b>⚠️ 章节路径不在此入口内</b>：路径是<b>跨标题块的累积状态机</b>
+     * （{@link SectionPathStack}），在有状态推进中产出，不能对块序列做无状态批量变换；
+     * 它与本入口同属 normalize/ 包但职责不同。
+     *
+     * @param blocks                     输入块（不可变）
+     * @param pageBaseAlreadyOneBased    true=页码已 1 基，跳过 shift；false=先 +1
+     * @return 归一化后的新序列
+     */
+    public static @NonNull List<PremiseBlock> normalize(
+            @NonNull List<PremiseBlock> blocks, boolean pageBaseAlreadyOneBased) {
+        List<PremiseBlock> out = pageBaseAlreadyOneBased
+                ? new ArrayList<>(blocks)
+                : shiftPageNumbers(blocks);
+        out = ensureReadingOrder(out);
+        out = renumberBrokenCharSpans(out);
+        return markRepeatedLineNoise(out);
+    }
+
     /** 重复行被判为页眉页脚的最短出现页数（与脚本 {@code max(3, pages//3)} 对应）。 */
     public static final int REPEATED_LINE_MIN_PAGES = 3;
 

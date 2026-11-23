@@ -19,6 +19,7 @@ import cn.studykid.rag.premise.model.ChunkTrace;
 import cn.studykid.rag.premise.model.PremiseBlock;
 import cn.studykid.rag.premise.model.PremiseDocument;
 import cn.studykid.rag.premise.normalize.ChunkIdentifiers;
+import cn.studykid.rag.premise.normalize.SectionPathStack;
 import cn.studykid.rag.premise.normalize.SectionPathResolver;
 import cn.studykid.rag.premise.role.BlockRoleResolver;
 
@@ -60,7 +61,7 @@ public class HeadingHierarchyChunker implements cn.studykid.rag.premise.spi.Bloc
                                        @NonNull ChunkContext context) {
         String documentId = document.documentId();
         List<Chunk> chunks = new ArrayList<>();
-        StringBuilder sectionPath = new StringBuilder();
+        SectionPathStack sectionPath = SectionPathResolver.newStack();
         String currentExerciseNo = null;
         int droppedNoise = 0;
         int splitOversize = 0;

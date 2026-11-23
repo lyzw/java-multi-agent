@@ -89,10 +89,10 @@ class DoclingSectionHierarchyTest {
                 "Starter 1@11", "3", "To-do list@17", "5", "Part I@19", "1");
         assertEquals("Starter 1", bs.get(0).sectionPath());
         // lvl=5 比 lvl=3 深 → 嵌套
-        assertEquals("Starter 1 / To-do list", bs.get(1).sectionPath());
+        assertEquals("Starter 1 > To-do list", bs.get(1).sectionPath());
         // ⚠️ lvl=1 变小 + 跨页 → 新的顶层分区，路径应重置为 "Part I"
         assertEquals("Part I", bs.get(2).sectionPath(),
-                "level 变小且跨页 → 新的顶层分区，不该是「Starter 1 / To-do list / Part I」");
+                "level 变小且跨页 → 新的顶层分区，不该是「Starter 1 > To-do list > Part I」");
     }
 
     @Test
@@ -110,7 +110,7 @@ class DoclingSectionHierarchyTest {
                 "Starter 4", "3", "Part I", "1");
         assertEquals("Starter 4", bs.get(0).sectionPath());
         assertEquals("Part I", bs.get(1).sectionPath(),
-                "level 变小 = 回到更上层，不能是「Starter 4 / Part I」");
+                "level 变小 = 回到更上层，不能是「Starter 4 > Part I」");
     }
 
     @Test
@@ -120,7 +120,7 @@ class DoclingSectionHierarchyTest {
                 "2 Rules around us Unit", "3",
                 "Festivals across cultures 上海教育出版社", "4");
         assertEquals("2 Rules around us Unit", bs.get(0).sectionPath());
-        assertEquals("2 Rules around us Unit / Festivals across cultures",
+        assertEquals("2 Rules around us Unit > Festivals across cultures",
                 bs.get(1).sectionPath(),
                 "页眉后缀必须剥离，否则路径会被页眉噪声淹没");
     }
@@ -157,8 +157,8 @@ class DoclingSectionHierarchyTest {
                 "Bridging cultures", "4",
                 "Highlights Read", "4");
         // 同页 (lvl=4 → lvl=4) 是替换，不是累积
-        assertEquals("Exploring China / Exploring the world Asia / Highlights Read",
-                bs.get(3).sectionPath().replace(" / ", " / "),
+        assertEquals("Exploring China > Exploring the world Asia > Highlights Read",
+                bs.get(3).sectionPath(),
                 "同层标题必须替换而非累积");
     }
 
@@ -185,7 +185,7 @@ class DoclingSectionHierarchyTest {
     void depthIsBounded() {
         List<LayoutBlock> bs = map(
                 "L1", "1", "L2", "2", "L3", "3", "L4", "4");
-        assertEquals(3, bs.get(3).sectionPath().split(" / ").length,
+        assertEquals(3, bs.get(3).sectionPath().split(" > ").length,
                 "最深只能 3 层：" + bs.get(3).sectionPath());
     }
 }

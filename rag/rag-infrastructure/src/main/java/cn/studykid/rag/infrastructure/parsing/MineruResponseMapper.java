@@ -13,6 +13,7 @@ import tools.jackson.databind.ObjectMapper;
 import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.LayoutBlock;
 import cn.studykid.rag.premise.model.PremiseBlock;
+import cn.studykid.rag.premise.normalize.SectionPathStack;
 
 /**
  * MinerU MiddleJson → {@link LayoutBlock} 映射（RAG-D26 阶段 1.2）。
@@ -129,11 +130,9 @@ public class MineruResponseMapper {
         // ③ 按页序 + 块序生成块（阅读顺序权威来源）
         List<PremiseBlock> out = new ArrayList<>();
         int charCursor = 0;
-        StringBuilder sectionPath = new StringBuilder();
-        // ⚠️ 标题栈：与 Docling mapper 的 replaceAtLevel 同语义
-        //    （level 值栈 + 标题栈平行，非连续 level 也能正确建树）。
-        List<Integer> pathLevels = new ArrayList<>();
-        List<String> pathTitles = new ArrayList<>();
+        // ⚠️ P1-4：与 Docling mapper / SectionPathResolver 共用同一份章节路径状态机，
+        //    移除本类原静态 replaceAtLevel 副本（分隔符与 level 栈口径不再漂移）。
+        SectionPathStack sectionPath = new SectionPathStack();
         // ⚠️ 答案区是跨块状态（同 Docling 的 inAnswerZone 槽）
         boolean[] inAnswerZone = {false};
 
@@ -149,7 +148,7 @@ public class MineruResponseMapper {
 
             for (JsonNode block : page.path("blocks")) {
                 PremiseBlock b = toBlock(block, page1, charCursor, sectionPath,
-                        pathLevels, pathTitles, inAnswerZone, repeatedShortLines);
+                        inAnswerZone, repeatedShortLines);
                 if (b != null) {
                     out.add(b);
                     charCursor = b.charEnd();
@@ -167,8 +166,7 @@ public class MineruResponseMapper {
      * 单块 → LayoutBlock。
      */
     private PremiseBlock toBlock(JsonNode block, int page1, int charCursor,
-                                 StringBuilder sectionPath,
-                                 List<Integer> pathLevels, List<String> pathTitles,
+                                 SectionPathStack sectionPath,
                                  boolean[] inAnswerZone, Set<String> repeatedShortLines) {
         String rawType = block.path("type").asText("");
         BlockType type = mapBlockType(rawType);
@@ -214,12 +212,13 @@ public class MineruResponseMapper {
         }
         boolean answerZone = inAnswerZone[0];
 
-        // ⚠️ 章节路径推进（只让 level 1~5 的非噪声标题推进——同 Docling 的双闸）
+        // ⚠️ 章节路径推进（只让 level 1~5 的非噪声标题推进——同 Docling 的双闸）。
+        // ⚠️ P1-4：闸后的层级替换/分隔符/页眉剥除委托 SectionPathStack，
+        //    与 Docling mapper 和 SectionPathResolver 逐字符同口径。
         if (LayoutPredicates.advancesSectionPath(type, level, trimmed)) {
-            replaceAtLevel(pathLevels, pathTitles, level,
-                    LayoutPredicates.stripPageHeaderSuffix(trimmed));
+            sectionPath.advance(page1, level, trimmed);
         }
-        String section = sectionPath(sectionPath, pathTitles);
+        String section = sectionPath.render();
 
         int start = charCursor;
         int end = start + trimmed.length();
@@ -261,55 +260,9 @@ public class MineruResponseMapper {
         return conf.isNumber() ? conf.asDouble() : Double.NaN;
     }
 
-    /**
-     * 由标题栈构建当前章节路径（「 / 」分隔，同 Docling mapper）。
-     */
-    private static String sectionPath(StringBuilder buf, List<String> titles) {
-        buf.setLength(0);
-        for (int i = 0; i < titles.size(); i++) {
-            if (i > 0) {
-                buf.append(" / ");
-            }
-            buf.append(titles.get(i));
-        }
-        return buf.toString().trim();
-    }
-
-    /**
-     * 把新标题写入路径的对应层级（与 Docling mapper 的 replaceAtLevel 逐行同语义：
-     * level 值栈定位槽位，同级替换、变浅弹出、超深替换末槽）。
-     */
-    private static void replaceAtLevel(List<Integer> levelStack, List<String> titleStack,
-                                       int level, String title) {
-        int idx = levelStack.indexOf(level);
-        if (idx >= 0) {
-            titleStack.set(idx, title);
-            while (titleStack.size() > idx + 1) {
-                titleStack.remove(titleStack.size() - 1);
-                levelStack.remove(levelStack.size() - 1);
-            }
-        } else if (!levelStack.isEmpty() && level < levelStack.get(levelStack.size() - 1)) {
-            while (!levelStack.isEmpty() && levelStack.get(levelStack.size() - 1) > level) {
-                titleStack.remove(titleStack.size() - 1);
-                levelStack.remove(levelStack.size() - 1);
-            }
-            if (titleStack.size() >= 3) { // MAX_SECTION_DEPTH（同 Docling 的 3 层）
-                titleStack.set(titleStack.size() - 1, title);
-                levelStack.set(levelStack.size() - 1, level);
-            } else {
-                titleStack.add(title);
-                levelStack.add(level);
-            }
-        } else {
-            if (titleStack.size() >= 3) {
-                titleStack.set(titleStack.size() - 1, title);
-                levelStack.set(levelStack.size() - 1, level);
-            } else {
-                titleStack.add(title);
-                levelStack.add(level);
-            }
-        }
-    }
+    // ⚠️ P1-4：原 sectionPath()/replaceAtLevel() 静态副本已删除，统一由
+    //    SectionPathStack 承载（level 值栈、同级替换、变浅弹出、超深替换末槽、
+    //    " > " 分隔符）。两份实现曾各自硬编码 " / " 与 3 层深度——是漂移的根源。
 
     /**
      * 跨页重复短行统计（页眉候选；与 Docling 的 findRepeatedShortLines 同口径：

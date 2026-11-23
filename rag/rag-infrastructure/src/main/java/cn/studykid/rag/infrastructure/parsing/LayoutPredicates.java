@@ -5,6 +5,7 @@ import java.util.regex.Pattern;
 
 import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.LayoutBlock;
+import cn.studykid.rag.premise.normalize.SectionPathStack;
 
 /**
  * 解析适配器的<b>共享版面判定</b>（RAG-D26 阶段 1.2 抽取）。
@@ -33,9 +34,6 @@ public final class LayoutPredicates {
                     + "|[(（]\\s*(\\d{1,3})\\s*[)）]"
                     + "|Exercise\\s+(\\d{1,3})"
                     + "|(\\d{1,2})\\s+(?=[A-Za-z]))");
-
-    /** 页眉后缀（沪教版实测：标题行尾拼着出版社名）。 */
-    private static final Pattern PAGE_HEADER_SUFFIX = Pattern.compile("上海教育出版社");
 
     /**
      * 抽取题号（与 Docling mapper 的 {@code extractExerciseNo} 逐字符同规则）。
@@ -87,11 +85,9 @@ public final class LayoutPredicates {
      * @return 剥掉页眉后的标题（若剥完为空则返回原值）
      */
     public static String stripPageHeaderSuffix(String text) {
-        if (text == null || text.isBlank()) {
-            return text;
-        }
-        String stripped = PAGE_HEADER_SUFFIX.matcher(text).replaceAll("").trim();
-        return stripped.isEmpty() ? text : stripped;
+        // ⚠️ P1-4：正则的唯一宿主是 SectionPathStack（premise/normalize），
+        //    这里只作兼容入口——与章节路径状态机共用同一份页眉剥除规则。
+        return SectionPathStack.stripHeaderSuffix(text);
     }
 
     /**

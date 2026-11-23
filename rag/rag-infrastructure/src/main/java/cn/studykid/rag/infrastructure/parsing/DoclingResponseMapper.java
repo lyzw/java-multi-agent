@@ -13,6 +13,7 @@ import tools.jackson.databind.ObjectMapper;
 import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.LayoutBlock;
 import cn.studykid.rag.premise.model.PremiseBlock;
+import cn.studykid.rag.premise.normalize.SectionPathStack;
 
 /**
  * Docling 响应 → {@link LayoutBlock} 映射（V1.0.2 T-4 / §4 Z5a）。
@@ -46,12 +47,6 @@ import cn.studykid.rag.premise.model.PremiseBlock;
  * {@code sectionPath}（标题栈）、{@code charStart/charEnd}（按阅读顺序累加）。
  */
 public class DoclingResponseMapper {
-
-
-    /**
-     * 章节路径最大层数（册 > 单元 > 小节）。
-     */
-    private static final int MAX_SECTION_DEPTH = 3;
 
     private final ObjectMapper mapper;
 
@@ -165,7 +160,9 @@ public class DoclingResponseMapper {
         // ③ 按 body.children 的 $ref 顺序生成块（阅读顺序的唯一权威来源）
         List<PremiseBlock> out = new ArrayList<>();
         int charCursor = 0;
-        StringBuilder sectionPath = new StringBuilder();
+        // ⚠️ P1-4：与 SectionPathResolver / MinerU mapper 共用同一份章节路径状态机，
+        //    彻底移除两份重复的 replaceAtLevel 实现（分隔符与 level 栈口径不再漂移）。
+        SectionPathStack sectionPath = new SectionPathStack();
         // ⚠️⚠️ 答案区是**跨块状态**，不是单块属性：
         //    实测发现「Answer Key」标题块被判 YES，但其下方真正的答案内容却是 no——
         //    这样答案会以讲解身份进入检索，**直接泄题**。
@@ -215,7 +212,7 @@ public class DoclingResponseMapper {
      */
     private PremiseBlock toBlock(String ref, Map<String, JsonNode> byRef,
                                  Map<String, BlockType> typeByRef, int charCursor,
-                                 StringBuilder sectionPath, boolean[] inAnswerZone,
+                                 SectionPathStack sectionPath, boolean[] inAnswerZone,
                                  Set<String> repeatedShortLines) {
         JsonNode node = byRef.get(ref);
         if (node == null) {
@@ -267,49 +264,18 @@ public class DoclingResponseMapper {
         int start = charCursor;
         int end = start + trimmed.length();
 
-        // 章节路径：标题块推进，其余块沿用当前路径
-        String section = sectionPath.toString().trim();
-        // ⚠️⚠️ 只让 level 1~5 的标题推进路径。
-        //    实测沪教版教材：410 个 section_header 里 409 个是 level=6，
-        //    那是「单元内小节」（B1 Look and say / Word study / C5 Further thinking），
-        //    几乎每页都有。若让它们参与推进，路径会变成
-        //    「英语 / 英语 / 2 Rules around us Unit / Festivals across cultures / …」
-        //    无限累积 —— 实测 94% 的块路径超 60 字符，引用溯源彻底失效。
-        // ⚠️ 推进闸（层级 + 噪声标题）与 MinerU 共享同一份（LayoutPredicates）。
+        // 章节路径：标题块推进，其余块沿用当前路径。
+        // ⚠️⚠️ 推进闸（只让 level 1~5 的非噪声标题推进）仍在此处——
+        //    实测沪教版 410 个 section_header 里 409 个是 level=6（单元内小节），
+        //    若让它们推进会无限累积（94% 的块路径超 60 字符，引用溯源失效）。
+        // ⚠️ P1-4：闸后的「层级槽位替换 / 跨页新分区 / 页眉剥除 / 分隔符」全部委托
+        //    SectionPathStack——与 MinerU mapper 和 SectionPathResolver 共用同一份实现。
+        //    原血泪细节（同级替换、level 不连续、比最深层级、236 字符超长路径）
+        //    已逐条搬进 SectionPathStack 类注释，勿在此处复活第二份算法。
         if (LayoutPredicates.advancesSectionPath(type, level, trimmed)) {
-            // ⚠️⚠️ 层级推进的语义是**按槽位替换**，不是追加。
-            //    首版用「截断到 level-1 再追加」，但 level-1 的处理有 off-by-one：
-            //    实测上册得到「Starter 1 / Starter 2 / Starter 3」——
-            //    三个**同级**（lvl=3）的标题被串成一条链，
-            //    而正确结果应是「Starter 3」（同级替换）。
-            // ⚠️ 标题文本里的页眉后缀要剥掉再入路径：
-            //    实测下册 p38 的标题是 'Festivals across cultures 上海教育出版社'
-            //    —— 标题是真的，但它**带着**页眉。直接入路径会让 1438 个片段的
-            //    sectionPath 都含「上海教育出版社」（页眉噪声）。
-            //    正解：路径里只留标题主体，页眉部分丢弃（页眉本身另有专门的降级逻辑）。
-            // ⚠️ 先判断这是「新分区」还是「子标题」：
-            //    同一页或紧邻页（≤1 页）的标题视为**子标题**（沿用父层级）；
-            //    跨页较多（>1 页）且 level 不更深时视为**新的顶层分区**（清空路径）。
-            // ⚠️ 判据必须是「比当前**最深**层级更浅或持平」——不是「比栈首更浅」。
-            //    实测上册 p105 'Exploring China'(lvl=1) → p108 'Exploring the world'(lvl=3)
-            //    → p109 'Bridging cultures'(lvl=4)：用栈首(lvl=1)比较时 lvl=3/4 都不满足，
-            //    于是路径一条条往上叠，p103~p116 累积出 236 个超长路径。
-            //    改成与「最深层级」比较后，同级/更浅的跨页标题会正确开启新分区。
-            int deepest = pathLevels.isEmpty() ? Integer.MAX_VALUE
-                    : pathLevels.get(pathLevels.size() - 1);
-            boolean newPartition = page - lastHeadingPage > 1 && level <= deepest;
-            if (newPartition) {
-                // 新的顶层分区：清空路径，从这一条重新开始
-                pathLevels.clear();
-                pathTitles.clear();
-            }
-            replaceAtLevel(sectionPath, level, stripPageHeaderSuffix(trimmed));
-            section = sectionPath.toString().trim();
-            lastHeadingPage = page;
-            if (pathLevels.isEmpty()) {
-                topLevelPage = page;
-            }
+            sectionPath.advance(page, level, trimmed);
         }
+        String section = sectionPath.render();
 
         // ⚠️ 答案区状态推进（**只由标题驱动**，见 isAnswerZoneHeading 的血泪注释）：
         //    ① 本块是「答案区标题」→ 进入答案区；
@@ -402,38 +368,6 @@ public class DoclingResponseMapper {
     }
 
     /**
-     * 剥掉标题里的页眉后缀。
-     *
-     * <p>⚠️ 实测：Docling 会把同一行的页眉拼进标题文本
-     * （如 'Festivals across cultures 上海教育出版社'）。
-     * 标题本身要保留，页眉部分要去掉——否则路径里会带满页眉噪声。
-     *
-     * @param text 原始标题
-     * @return 剥掉页眉后的标题（若剥完为空则返回原值）
-     */
-    private static String stripPageHeaderSuffix(String text) {
-        // ⚠️ 委托 {@link LayoutPredicates}（RAG-D26 阶段 1.2 共享判定）。
-        return LayoutPredicates.stripPageHeaderSuffix(text);
-    }
-
-    /**
-     * 判断标题是否为「不该进入章节路径的噪声标题」。
-     *
-     * <p><b>⚠️ 实测依据</b>：沪教版教材的封面/封底标题会让路径变成
-     * 「英语 / 英语 / 2 Rules around us Unit / …」——
-     * 「英语」出现两次（封面 + 内页），「上海教育出版社」是页眉噪声。
-     * 这些内容本身是真实正文（不能丢），只是<b>不该作为章节层级</b>。
-     *
-     * @param text 标题文本
-     * @return 是噪声标题返回 true
-     */
-    private static boolean isNoiseHeading(String text) {
-        // ⚠️ 委托 {@link LayoutPredicates}（RAG-D26 阶段 1.2 共享判定）：
-        //    封面/封底判噪规则随实现移至 predicates，双 mapper 共享。
-        return LayoutPredicates.isNoiseHeading(text);
-    }
-
-    /**
      * 找出「跨页重复出现的短行」——即页眉。
      *
      * <p><b>⚠️ 判据</b>：同一文本在<b>不少于 3 个不同页</b>上出现，且长度 ≤ 30。
@@ -505,109 +439,8 @@ public class DoclingResponseMapper {
         return LayoutPredicates.isAnswerZoneHeading(text);
     }
 
-    /**
-     * 把新标题写入路径的<b>对应层级</b>，替换该层及更深的内容。
-     *
-     * <p>路径是<b>按层级排列的栈</b>：level=1 占第 1 槽，level=2 占第 2 槽……
-     * 新标题进来时，它<b>占据</b>自己那一槽，<b>清掉它后面的所有槽</b>。
-     *
-     * <p>例：路径已有 {@code "Part I / Unit 1"}（Unit 1 是 level 2），
-     * 现在来了个 level=2 的 {@code "Unit 2"} → 结果应为 {@code "Part I / Unit 2"}，
-     * 而<b>不是</b> {@code "Part I / Unit 1 / Unit 2"}。
-     *
-     * @param path  路径（原地修改）
-     * @param level 新标题层级（1 基）
-     * @param title 新标题文本
-     */
-    private void replaceAtLevel(StringBuilder path, int level, String title) {
-        // ⚠️⚠️ 必须按「**level 值序列**」而非「level-1 索引」定位槽位。
-        //    实测上册的 level 序列是 1,2,3,5 混用（不是连续的 1,2,3,4）：
-        //      p2  '英语'         lvl=1
-        //      p7  'Contents'     lvl=2
-        //      p11 'Starter 1'    lvl=3
-        //      p17 'To-do list'  lvl=5   ← 跳过了 4
-        //    用 level-1 当索引时，lvl=5 会落到第 5 槽（超深度），
-        //    而 lvl=3 的三个兄弟（Starter 1/2/3）本该互相替换，
-        //    结果却被串成「Starter 1 / Starter 2 / Starter 3」的链。
-        //
-        //    正解：维护一个「已见 level 值」的栈——
-        //      新标题的 level 若已在栈中 → 替换该槽并截断其后的槽；
-        //      若不在栈中 → 追加到栈顶（更深一层）。
-        //    这样 level 值不连续也能得到正确的树。
-        List<Integer> levelStack = pathLevels;
-        List<String> titleStack = pathTitles;
-
-        int idx = levelStack.indexOf(level);
-        if (idx >= 0) {
-            // 同级 → 替换并截断更深的部分
-            titleStack.set(idx, title);
-            while (titleStack.size() > idx + 1) {
-                titleStack.remove(titleStack.size() - 1);
-                levelStack.remove(levelStack.size() - 1);
-            }
-        } else if (!levelStack.isEmpty() && level < levelStack.get(levelStack.size() - 1)) {
-            // ⚠️⚠️ level **变小** = 层级变浅（回到更上层），不是「更深一层」。
-            //    实测上册：p18 'Starter 4'(lvl=3) 之后 p19 出现 'Part I'(lvl=1)，
-            //    若按「不在栈中 → 追加」处理，会得到「Starter 4 / Part I」——
-            //    Part I 是**顶层**分区，不可能挂在 Starter 4 之下。
-            //    正解：弹出所有比它深的槽，把它放到剩下的最后一位。
-            while (!levelStack.isEmpty() && levelStack.get(levelStack.size() - 1) > level) {
-                titleStack.remove(titleStack.size() - 1);
-                levelStack.remove(levelStack.size() - 1);
-            }
-            if (titleStack.size() >= MAX_SECTION_DEPTH) {
-                titleStack.set(titleStack.size() - 1, title);
-                levelStack.set(levelStack.size() - 1, level);
-            } else {
-                titleStack.add(title);
-                levelStack.add(level);
-            }
-        } else {
-            // 更深 → 追加一层
-            if (titleStack.size() >= MAX_SECTION_DEPTH) {
-                // ⚠️ 超过最大深度：替换最后一槽（不丢标题，只是不再细分）
-                titleStack.set(titleStack.size() - 1, title);
-                levelStack.set(levelStack.size() - 1, level);
-            } else {
-                titleStack.add(title);
-                levelStack.add(level);
-            }
-        }
-        // 重建
-        path.setLength(0);
-        for (int i = 0; i < titleStack.size(); i++) {
-            if (i > 0) {
-                path.append(" / ");
-            }
-            path.append(titleStack.get(i));
-        }
-    }
-
-    /**
-     * 上一个标题所在页码（用于判断标题是否开启了新的顶层分区）。
-     *
-     * <p>⚠️ 之所以要它：Docling 的 level 值**不可靠**（实测会跳号：
-     * 上册出现 1→3→5，下册出现 1→3→4），纯靠数值比较会把
-     * 'Part I'(lvl=1) 与 'Starter 1'(lvl=3) 判成父子，
-     * 而实测二者其实是**平级的顶层分区**（Part I 在 p19、Starter 1 在 p11，
-     * 是两套独立的编排）。
-     * 页码是最可靠的信号：真正的子标题紧跟父标题出现在同一页或紧邻页。
-     */
-    private int lastHeadingPage = -1;
-
-    /**
-     * 当前路径的顶层标题所在页码（用于判定「新标题是顶层分区还是子标题」）。
-     */
-    private int topLevelPage = -1;
-
-    /**
-     * 路径对应的 level 值栈（与 {@link #pathTitles} 平行）。
-     *
-     * <p>⚠️ 见 {@link #replaceAtLevel}：level 值不连续（实测 1,2,3,5），
-     * 因此**不能**用 level-1 当数组下标，必须单独记录每个槽的 level 值。
-     */
-    private final List<Integer> pathLevels = new ArrayList<>();
-
-    /** 路径各槽的标题文本（与 {@link #pathLevels} 平行）。 */
-    private final List<String> pathTitles = new ArrayList<>();
+    // ⚠️ P1-4：原 replaceAtLevel + pathLevels/pathTitles/lastHeadingPage/topLevelPage
+    //    四个跨块状态已全部收敛到 SectionPathStack（rag-premise/normalize）。
+    //    这些状态的血泪注释（level 不连续 1,2,3,5、同级替换、236 字符超长路径、
+    //    页码作为新分区信号）随实现迁移至 SectionPathStack 类注释——勿在此复活第二份算法。
 }

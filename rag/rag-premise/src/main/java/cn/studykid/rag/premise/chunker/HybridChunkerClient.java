@@ -24,6 +24,7 @@ import cn.studykid.rag.premise.model.ChunkPolicyConfig;
 import cn.studykid.rag.premise.model.ChunkTrace;
 import cn.studykid.rag.premise.model.PremiseDocument;
 import cn.studykid.rag.premise.normalize.ChunkIdentifiers;
+import cn.studykid.rag.premise.normalize.SectionPathStack;
 import cn.studykid.rag.premise.normalize.SectionPathResolver;
 import cn.studykid.rag.premise.role.BlockRoleResolver;
 import cn.studykid.rag.premise.spi.BlockChunker;
@@ -252,7 +253,7 @@ public class HybridChunkerClient implements BlockChunker {
         int page = bc.pages().isEmpty() ? 1 : bc.pages().get(0);
         int charStart = bc.charStart() >= 0 ? bc.charStart() : 0;
         int charEnd = bc.charEnd() > charStart ? bc.charEnd() : charStart + trimmed.length();
-        String sectionPath = String.join(" > ", bc.headings());
+        String sectionPath = String.join(SectionPathStack.SEPARATOR, bc.headings());
         Chunk.Locator locator = new Chunk.Locator(page, sectionPath,
                 effectiveExerciseNo(bc, blockByIndex), charStart, charEnd);
         return new Chunk(

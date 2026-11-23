@@ -25,6 +25,48 @@ class NormalizationRulesTest {
                 charStart, charStart + text.length()));
     }
 
+    // ---------- 唯一入口（P1-4） ----------
+
+    @Test
+    @DisplayName("normalize 单一入口：0 基页码 +1、稳定排序、区间修复、重复行改判一次完成")
+    void normalizeSingleEntry() {
+        // 输入：乱序页码 + 0 基 + 非法区间 + 跨页重复短行
+        PremiseBlock p2noise = PremiseBlock.fromLayoutBlock(new LayoutBlock(
+                BlockType.PARAGRAPH, "页眉", 2, 0, "", null, false, 50, 3));
+        PremiseBlock p1 = PremiseBlock.fromLayoutBlock(new LayoutBlock(
+                BlockType.PARAGRAPH, "正文", 1, 0, "", null, false, 0, 2));
+        PremiseBlock p2 = PremiseBlock.fromLayoutBlock(new LayoutBlock(
+                BlockType.PARAGRAPH, "页眉", 2, 0, "", null, false, 0, 2));
+        PremiseBlock p3 = PremiseBlock.fromLayoutBlock(new LayoutBlock(
+                BlockType.PARAGRAPH, "页眉", 3, 0, "", null, false, 0, 2));
+        PremiseBlock p4 = PremiseBlock.fromLayoutBlock(new LayoutBlock(
+                BlockType.PARAGRAPH, "页眉", 4, 0, "", null, false, 0, 2));
+
+        List<PremiseBlock> out = NormalizationRules.normalize(
+                List.of(p2noise, p1, p2, p3, p4), false);
+
+        // 页码 +1 且稳定排序：p1→2, 两条 p2→3（保留原相对次序）, p3→4, p4→5
+        assertThat(out).extracting(PremiseBlock::pageNumber)
+                .containsExactly(2, 3, 3, 4, 5);
+        // 非法区间的那块（原 p2noise，现页 3）按页内顺序重编为 [0,2)
+        assertThat(out.get(1).charStart()).isZero();
+        assertThat(out.get(2).charStart()).isEqualTo(2);
+        // 跨 3 页（3/4/5）重复短行整块改判噪声
+        assertThat(out.get(1).type()).isEqualTo(BlockType.BOILERPLATE);
+        assertThat(out.get(2).type()).isEqualTo(BlockType.BOILERPLATE);
+        assertThat(out.get(3).type()).isEqualTo(BlockType.BOILERPLATE);
+        assertThat(out.get(4).type()).isEqualTo(BlockType.BOILERPLATE);
+    }
+
+    @Test
+    @DisplayName("normalize 跳过页码换算：mapper 已 1 基时不重复 +1")
+    void normalizeSkipsShiftWhenAlreadyOneBased() {
+        List<PremiseBlock> out = NormalizationRules.normalize(
+                List.of(pb("内容", 1, 0)), true);
+
+        assertThat(out.get(0).pageNumber()).isEqualTo(1);
+    }
+
     // ---------- 页码基准 ----------
 
     @Test
@@ -141,7 +183,7 @@ class NormalizationRulesTest {
     @Test
     @DisplayName("标题层级回退时截断路径（D04 §5.3 的关键语义）")
     void sectionPathTruncates() {
-        StringBuilder path = new StringBuilder();
+        SectionPathStack path = SectionPathResolver.newStack();
         LayoutBlock h1 = new LayoutBlock(BlockType.HEADING, "第3章 二次函数", 40, 1, "",
                 null, false, 0, 8);
         LayoutBlock h2 = new LayoutBlock(BlockType.HEADING, "3.1 概念", 41, 2, "",
@@ -154,24 +196,25 @@ class NormalizationRulesTest {
         SectionPathResolver.advance(path, h1);
         SectionPathResolver.advance(path, h2);
         SectionPathResolver.advance(path, h3);
-        assertThat(path.toString())
+        assertThat(path.render())
                 .isEqualTo("第3章 二次函数 > 3.1 概念 > 3.1.1 定义");
 
         SectionPathResolver.advance(path, h2again);
-        assertThat(path.toString()).isEqualTo("第3章 二次函数 > 3.2 图像");
+        assertThat(path.render()).isEqualTo("第3章 二次函数 > 3.2 图像");
     }
 
     @Test
     @DisplayName("有标题上下文时优先；无上下文时回退解析器路径")
     void resolvePrefersHeadingsFallsBackToParser() {
-        StringBuilder withHeadings = new StringBuilder("第3章");
+        SectionPathStack withHeadings = SectionPathResolver.newStack();
+        withHeadings.advance(1, 1, "第3章");
         LayoutBlock parserPathBlock = new LayoutBlock(BlockType.PARAGRAPH, "内容", 45, 0,
                 "解析器路径", null, false, 0, 2);
 
         assertThat(SectionPathResolver.resolve(withHeadings, parserPathBlock))
                 .isEqualTo("第3章");
 
-        StringBuilder noHeadings = new StringBuilder();
+        SectionPathStack noHeadings = SectionPathResolver.newStack();
         assertThat(SectionPathResolver.resolve(noHeadings, parserPathBlock))
                 .isEqualTo("解析器路径");
     }

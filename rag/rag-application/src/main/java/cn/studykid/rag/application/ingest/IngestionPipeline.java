@@ -14,6 +14,7 @@ import cn.studykid.rag.ports.DocumentParserPort;
 import cn.studykid.rag.ports.LayoutBlock;
 import cn.studykid.rag.ports.ParsedDocument;
 import cn.studykid.rag.premise.normalize.ChunkIdentifiers;
+import cn.studykid.rag.premise.normalize.SectionPathStack;
 import cn.studykid.rag.premise.normalize.SectionPathResolver;
 import cn.studykid.rag.premise.role.BlockRoleResolver;
 
@@ -181,7 +182,7 @@ public class IngestionPipeline {
                                                   @NonNull List<KnowledgePoint> knowledgePoints,
                                                   @NonNull ParsedDocument parsed) {
         List<Chunk> chunks = new ArrayList<>();
-        StringBuilder sectionPath = new StringBuilder();
+        SectionPathStack sectionPath = SectionPathResolver.newStack();
         String currentExerciseNo = null;
 
         for (LayoutBlock block : parsed.blocks()) {
