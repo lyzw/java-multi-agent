@@ -38,9 +38,15 @@ D27 的**主线方向正确**（版面解析 + 教学语义归一化 + 父子块
 | — | **P0-6** CI 门禁 + 反证 | 🟡 | D-F 孤儿检测与标注纪律断言已在批 1 落地；G-1~G-9 全量门禁待 P0-5 case 就位 |
 | 批 2 | **P1-1** 页级路由 + **P1-2** 解析质量分 | ✅ | 新增 `RouteProfile`/`PageSignals`/`PageRoute`/`RoutingConfig`/`PageRouter`/`ParseQualityScorer`/`RoutingParseBackend`/`PageQuarantineException`；`ParseTrace` 补 `elapsedMs`/`routeReason`/`qualityScore`/`pageRoutes`（第 4 项是为「升级路径可观测」补的页级明细，供后续 `route_trace` jsonb 落库）。`PageRouterTest` 9 + `ParseQualityScorerTest` 5 + `RoutingParseBackendTest` 6 + `PageRoutingWiringTest` 5 全绿；**撤点反证**：把升级合并改成回退 primary → 2 例立即转红，恢复+clean 重建全绿。灰度开关 `rag.premise.page-routing.enabled=false` 默认关闭，启用时无 MinerU 端点/primary 已是 MinerU 均装配期 fail-closed |
 
+| 批 3 | **P1-3** IR 三件套落地 | ✅ | ① `bbox` 真实赋值：两个 mapper 新增 `mapToPremiseBlocks()`，Docling `prov[0].bbox{l,t,r,b}` / MinerU `bbox`（0-1 原样）流入 `PremiseBlock`；`map()` 委托它恒等解包（既有测试零改）。**confidence 原始响应无字段 → 恒 NaN（⛔ 不伪造）**，`hasBbox()/hasConfidence()` 判未知。② `PremiseDocument` 补 `markdownRef`/`pageCacheRef`（4 参/3 参 compat 构造逐字段带过 doclingJsonRef）+ `withArtifacts`。③ 新增 `IntermediateRepresentation`/`PremiseIrRenderer`（Markdown+JSON 同源、BOILERPLATE 剔除、严格转义、bbox 缺失输出 null）+ `retrieveOriginal`（char 区间切片，越界抛错）；`PremiseArtifactSink` SPI + `ObjectStorePremiseArtifactSink`（复用 ObjectStorePort，键空间 `premise/` 隔离、路径穿越拒绝、fail-closed）+ `PremiseArtifactWriter`（渲染→落盘→回填一步）。`ParseWithRaw` 加 5 参 `premiseBlocks`（整册带几何、分段兼容构造诚实无几何）。GeometryAssignmentTest 8 + PremiseIrRendererTest 6 + PremiseArtifactWriterTest 3 + ObjectStorePremiseArtifactSinkTest 4 全绿。**两次撤点反证**：伪造空框 `[0,0,0,0]` → bbox 测试转红；空回取 → 20/20 转红；恢复+clean 重建全绿 |
+
 > **实现决策（批 2）**：路由信号从 primary（轻量）**已解析块**推导（`PageSignals.of`），不二次解析 PDF 字节——「先用便宜路径」的零额外成本落点；升级后端只在存在 HEAVY 页时调用一次整册。混合后端时强制清空 `doclingJsonRef`，避免 `HybridChunkerClient` 拿过期 Docling JSON 切出错位块。阈值 `RoutingConfig.productionDefault()` 是**初始工程值**，须在真实教材基准集上标定（D08 SG-2），不得为让某册通过而临时放水。
 >
-> **下一步**：批 3 从 P1-3（IR 三件套：`bbox`/`confidence` 真实赋值 + Markdown 落盘 + 原页缓存）切入；P0-4/P0-5 并行等待数据授权与标注资源。
+> **实现决策（批 3）**：confidence **不做伪造赋值**——Docling/MinerU 实测响应都无块级置信度字段，`hasConfidence()` 恒 false 是诚实结论；D27 §4.2 示例里的 0.97 是示意值，非生产可得。样本响应 `sample-response.json` 的 `prov` 也被裁剪得只剩 `page_no`，故 bbox 赋值测试用带 bbox 的手工响应夹具。落盘能力（`PremiseArtifactSink`/`Writer`）已就位并装配为 Spring bean，但见下方**可达性缺口**。
+>
+> ⚠️ **运行期可达性缺口（批 3 发现，D09 G1 前必须解决）**：生产摄取链是 `IngestJobOrchestrator → IngestionPipeline.ingest()`，其 premise 分支走 `PremiseDocument.fromParsed(documentId, parsed)`——而 `parsed` 来自 `DocumentParserPort`（只有 `LayoutBlock`），**不经过 `PremisePreprocessor`/`RoutingParseBackend`，也不会带 mapper 的 bbox 几何**。即批 1~3 的路由、质量分、几何、IR 落盘能力目前均为「已实现+已装配为 bean，但生产摄取链未调用」。这是项目铁律 #15 警示的空转风险。解决路径：阶段 3 premise 管线接线时，把 `IngestJobOrchestrator` 的解析+切分段从 `IngestionPipeline` 切到 `PremisePreprocessor`（或让 `IngestionPipeline` 注入 `DocumentParseBackend`+`PremiseArtifactWriter`），属跨阶段门禁 G1 的系统性改造，不在单批内草率接通。**在接线+真实语料端到端通过前，不宣称 P1 阶段完成。**
+>
+> **下一步**：批 4 从 P1-4（归一化收敛：`NormalizationRules` 成唯一入口、mapper 去重、分隔符统一 `>`）切入；P0-4/P0-5 并行等待数据授权与标注资源。
 
 ### 0.2 三类读者怎么读
 
@@ -88,7 +94,7 @@ D27 的**主线方向正确**（版面解析 + 教学语义归一化 + 父子块
 | 切分（父子块） | （D27 列为待补） | 🔴 缺失：`parent_id`/`chunk_level`/知识点语义单元代码与 DDL 零实现 | 新建 |
 | 角色闸门 | `BlockRoleResolver` / `RetrievalPolicy.allowsRole` | 🟢 可用：结构化硬过滤，EXPLAIN/SOLVE/VERIFY 三档真实生效；`EXERCISE_HINT` 无生产者 | 直接复用，补提示角色来源 |
 | 题号规范化 / 题答配对 | （D27 列为待补） | 🔴 缺失：题号正则只认 `1.`/`(1)`/`Exercise 3`；`exercise_ref` 仅是同块继承，非跨文档配对 | 新建 |
-| 中间格式（Markdown/JSON/原页） | （D27 列为待补） | 🔴 大部分缺失：Markdown 落盘无；`bbox`/`confidence` 只有字段无生产赋值；`reading_order` 无显式字段；原页缓存无 | 新建 |
+| 中间格式（Markdown/JSON/原页） | （D27 列为待补） | 🟡 批 3 已落地能力层：`bbox` 从 mapper 真实赋值、`PremiseIrRenderer` 同源渲染 Markdown+JSON（显式 readingOrder）、`PremiseArtifactSink`/`Writer` 落盘三件套；**confidence 原始无字段恒 NaN（不伪造）**。⚠️ 生产摄取链尚未调用（见 §0.1.1 可达性缺口） | 能力层完成，待 G1 接线 |
 | 跨页表 / 公式 LaTeX+自然语言 / 核心图 caption | （D27 列为待补） | 🔴 缺失：公式取 `orig` 纯文本、图回退 `[图]`、无 LaTeX 与 VLM | 新建，公式自然语言需受控生成 + 抽检 |
 | 编排与状态机 | `IngestJobOrchestrator` | 🟢 可用：PARSING→…→SUCCEEDED；但无 `QUARANTINED_REVIEW`/`REINDEX_PENDING` | 扩展状态 + 隔离区 |
 | Embedding 端口 | `EmbeddingPorts` / `OpenAiCompatibleEmbeddingPort` / `LocalPortGate` | 🟢 可用：Qwen3-8B 通过通用端口配置（**当前 4096，目标 1024 见 D29 DEC-P2**）；BGE-M3 无实现；占位嵌入被闸门拦截 | 端口直接复用，维度按 D29 切换 |

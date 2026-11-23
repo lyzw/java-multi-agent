@@ -36,12 +36,16 @@ import cn.studykid.rag.ports.ParsedDocument;
  * @param trace          解析留痕（后端、版本、页数、告警）
  * @param doclingJsonRef 解析阶段的原始 DoclingDocument JSON（仅 Docling 后端非空；
  *                       分块桥复用它做 chunking，禁止二次解析）
+ * @param markdownRef    P1-3：中间产物 Markdown 的落盘引用（相对键/URI；未落盘为 null）
+ * @param pageCacheRef   P1-3：原页缓存引用（相对键/URI；未落盘为 null）——用于人工抽检与引用回看
  */
 public record PremiseDocument(
         @NonNull String documentId,
         @NonNull List<PremiseBlock> blocks,
         @NonNull ParseTrace trace,
-        String doclingJsonRef) {
+        String doclingJsonRef,
+        String markdownRef,
+        String pageCacheRef) {
 
     public PremiseDocument {
         if (documentId == null || documentId.isBlank()) {
@@ -53,11 +57,28 @@ public record PremiseDocument(
         }
     }
 
+    /** 四参构造（P1-3 前调用点 / 测试夹具）：中间产物引用未落盘（null）。 */
+    public PremiseDocument(@NonNull String documentId,
+                           @NonNull List<PremiseBlock> blocks,
+                           @NonNull ParseTrace trace,
+                           String doclingJsonRef) {
+        this(documentId, blocks, trace, doclingJsonRef, null, null);
+    }
+
     /** 主构造（无 docling JSON——MinerU / PP 等非 Docling 后端）。 */
     public PremiseDocument(@NonNull String documentId,
                            @NonNull List<PremiseBlock> blocks,
                            @NonNull ParseTrace trace) {
-        this(documentId, blocks, trace, null);
+        this(documentId, blocks, trace, null, null, null);
+    }
+
+    /**
+     * P1-3：附带中间产物引用（Markdown / 原页缓存）。
+     * ⚠️ 逐字段带过 doclingJsonRef——避免 compat 构造器把它静默清空（项目铁律）。
+     */
+    public @NonNull PremiseDocument withArtifacts(String markdownRef, String pageCacheRef) {
+        return new PremiseDocument(documentId, blocks, trace, doclingJsonRef,
+                markdownRef, pageCacheRef);
     }
 
     /**

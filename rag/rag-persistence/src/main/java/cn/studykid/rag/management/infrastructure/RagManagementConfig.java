@@ -379,4 +379,29 @@ public class RagManagementConfig {
             @Value("${rag.corpus-bucket.base-dir:./corpus-bucket}") String baseDir) {
         return new LocalObjectStoreAdapter(baseDir);
     }
+
+    /**
+     * P1-3：IR 中间产物落盘端口（Markdown / JSON / 原页缓存）——复用同一对象存储载体。
+     *
+     * <p>⚠️ 与 {@link #objectStorePort} 共用 baseDir，但逻辑键前缀为 {@code premise/}，
+     * 与用户上传语料的 objectRef 键空间隔离（见 ObjectStorePremiseArtifactSink 注释）。
+     */
+    @Bean
+    public cn.studykid.rag.premise.spi.PremiseArtifactSink premiseArtifactSink(
+            ObjectStorePort objectStorePort) {
+        return new cn.studykid.rag.infrastructure.ingest.ObjectStorePremiseArtifactSink(
+                objectStorePort);
+    }
+
+    /**
+     * P1-3：IR 中间产物落盘门面（渲染→落盘→回填引用一步完成）。
+     *
+     * <p>上层摄取编排器在 premise 管线接线点注入本 bean 即可获得 Markdown/JSON/原页缓存
+     * 三件套与可回取原文引用；当前生产链尚未切换到 premise 管线（见 D28 §0.1.1 可达性缺口）。
+     */
+    @Bean
+    public cn.studykid.rag.premise.ir.PremiseArtifactWriter premiseArtifactWriter(
+            cn.studykid.rag.premise.spi.PremiseArtifactSink premiseArtifactSink) {
+        return new cn.studykid.rag.premise.ir.PremiseArtifactWriter(premiseArtifactSink);
+    }
 }
