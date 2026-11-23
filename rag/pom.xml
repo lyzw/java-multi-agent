@@ -59,6 +59,11 @@
     <module>rag-api</module>
     <module>rag-management</module>
     <module>rag-bootstrap</module>
+    <!--
+      评测基础设施（RAG-D28 P0-3 / D08 SG-1）：case 加载器 + 标注纪律断言 + D-F 孤儿检测。
+      纯测试支撑模块，不进任何生产应用的运行时依赖，故排在最后。
+    -->
+    <module>rag-evaluation</module>
   </modules>
 
   <dependencyManagement>

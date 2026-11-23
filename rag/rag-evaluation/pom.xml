@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>cn.studykid.rag</groupId>
+    <artifactId>java-saas-rag</artifactId>
+    <version>1.0.1-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>rag-evaluation</artifactId>
+  <name>rag-evaluation :: 评测基础设施</name>
+  <description>RAG-D08 / D28 P0-3：可执行 case 加载器、标注纪律断言（D-A~G）、D-F 孤儿检测。仅测试支撑，不进生产运行时。</description>
+
+  <dependencies>
+    <!--
+      case 文件是 JSON 可执行资源（D08 FR-RAG-002），加载器在 main 源码供测试调用。
+      Jackson 版本由 Spring Boot BOM 统一管理（父 pom import）。
+    -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+  </dependencies>
+</project>

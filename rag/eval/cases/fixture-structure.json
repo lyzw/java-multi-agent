@@ -1,0 +1,387 @@
+{
+  "caseSetId": "RAG-FIXTURE-STRUCTURE",
+  "layer": "L1",
+  "version": "0.1.0",
+  "changeNote": "P0-3 骨架结构验证夹具：合成 fixture，非真实语料，仅供 CI 验证加载器/纪律/D-F 孤儿检测生效。",
+  "note": "合成夹具的评测结果不得用于对外宣称任何质量指标（RAG-D08 §3.2 / §8.1）。",
+  "cases": [
+    {
+      "id": "RAG-FIXTURE-001",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-STRAT-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-002",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-EXEC-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-003",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-ANNOT-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-004",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-SEP-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-005",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-EXT-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-006",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-TRAP-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-007",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-TRAP-002"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-008",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-TRAP-003"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-009",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-TRAP-004"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-010",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-TRAP-005"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-011",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-TRAP-006"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-012",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-TRAP-007"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-013",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-METRIC-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-014",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-THRESH-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-015",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-GATE-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-016",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-FALSIFY-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-017",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-FALSIFY-002"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-018",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-FALSIFY-003"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-019",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-FALSIFY-004"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-020",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-FALSIFY-005"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-021",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-FALSIFY-006"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-022",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-FALSIFY-007"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-023",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-FALSIFY-008"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-024",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-FALSIFY-009"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-025",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-HUMAN-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-026",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-REGR-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    },
+    {
+      "id": "RAG-FIXTURE-027",
+      "layer": "L1",
+      "documentRef": "fixture://synthetic-doc-1",
+      "expected": {
+        "fixtureOnly": true
+      },
+      "rationale": "结构验证夹具：仅验证 case 加载、标注纪律与 AT 双向可追溯，不含真实教材期望值，不得用于对外宣称任何质量指标。",
+      "acceptance": [
+        "AT-RAG-SCALE-001"
+      ],
+      "annotatorId": "fixture-struct-team-A",
+      "reviewedBy": "fixture-struct-team-B"
+    }
+  ]
+}
