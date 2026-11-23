@@ -26,6 +26,10 @@ import org.jspecify.annotations.NonNull;
  * @param segmented      是否启用分段提交（大册分段是 Docling 路径的实测约束）
  * @param segments       实际分段数（不分段为 1）
  * @param warnings       归一化阶段产生的非致命告警（如「第 12 页缺失页码，按顺序回填」）
+ * @param elapsedMs      解析耗时（毫秒；-1 表示未知）
+ * @param routeReason    页级路由汇总结论（D28 §2.2；无路由为空串）
+ * @param qualityScore   轻量通道解析质量分的整册代表值（最低页；未评分为 NaN）
+ * @param pageRoutes     逐页路由决策（D28 P1-1/P1-2 可观测性；未路由为空列表）
  */
 public record ParseTrace(
         @NonNull String backendId,
@@ -33,7 +37,11 @@ public record ParseTrace(
         int pageCount,
         boolean segmented,
         int segments,
-        @NonNull List<String> warnings) {
+        @NonNull List<String> warnings,
+        long elapsedMs,
+        @NonNull String routeReason,
+        double qualityScore,
+        @NonNull List<PageRoute> pageRoutes) {
 
     public ParseTrace {
         if (backendId == null || backendId.isBlank()) {
@@ -47,6 +55,20 @@ public record ParseTrace(
             throw new IllegalArgumentException("segments 必须 >= 1");
         }
         warnings = warnings == null ? List.of() : List.copyOf(warnings);
+        routeReason = routeReason == null ? "" : routeReason;
+        pageRoutes = pageRoutes == null ? List.of() : List.copyOf(pageRoutes);
+    }
+
+    /**
+     * 六参兼容构造（旧调用点：Docling/Mineru 后端、测试夹具）。
+     *
+     * <p>⚠️ 新字段取「未设置」语义，不伪造数据：耗时 -1、路由空串、质量分 NaN、路由明细空表。
+     */
+    public ParseTrace(@NonNull String backendId, @NonNull String backendVersion,
+                      int pageCount, boolean segmented, int segments,
+                      @NonNull List<String> warnings) {
+        this(backendId, backendVersion, pageCount, segmented, segments, warnings,
+                -1L, "", Double.NaN, List.of());
     }
 
     /**
@@ -71,6 +93,34 @@ public record ParseTrace(
         }
         var merged = new java.util.ArrayList<String>(warnings);
         merged.addAll(more);
-        return new ParseTrace(backendId, backendVersion, pageCount, segmented, segments, merged);
+        // ⚠️ 逐字段带过：compat 构造器会静默清空新字段（项目铁律），此处必须走全参构造。
+        return new ParseTrace(backendId, backendVersion, pageCount, segmented, segments,
+                merged, elapsedMs, routeReason, qualityScore, pageRoutes);
+    }
+
+    /**
+     * 追加路由留痕（保持其余字段不变）。
+     *
+     * @param reason      路由汇总结论
+     * @param score       整册代表质量分
+     * @param routes      逐页路由决策
+     * @return 新实例
+     */
+    public @NonNull ParseTrace withRouting(@NonNull String reason, double score,
+                                           @NonNull List<PageRoute> routes) {
+        return new ParseTrace(backendId, backendVersion, pageCount, segmented, segments,
+                warnings, elapsedMs, reason == null ? "" : reason, score,
+                routes == null ? List.of() : List.copyOf(routes));
+    }
+
+    /**
+     * 记录解析耗时（保持其余字段不变）。
+     *
+     * @param millis 耗时（毫秒）
+     * @return 新实例
+     */
+    public @NonNull ParseTrace withElapsedMs(long millis) {
+        return new ParseTrace(backendId, backendVersion, pageCount, segmented, segments,
+                warnings, millis, routeReason, qualityScore, pageRoutes);
     }
 }

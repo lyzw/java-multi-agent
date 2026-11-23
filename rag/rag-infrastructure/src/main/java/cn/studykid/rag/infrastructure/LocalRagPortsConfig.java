@@ -213,13 +213,25 @@ public class LocalRagPortsConfig {
      * @param mineruTimeout MinerU 总超时（秒）
      * @return 门面实例
      */
+    /**
+     * 五参兼容重载（既有测试／直接调用点）：<b>不启用</b>页级路由，行为与迁移前一致。
+     * Spring 装配走下方的六参 {@link Bean} 方法。
+     */
+    public cn.studykid.rag.premise.PremisePreprocessor premisePreprocessor(
+            DocumentParserPort parserPort, String backendValue,
+            String mineruBaseUrl, String mineruTier, int mineruTimeout) {
+        return premisePreprocessor(parserPort, backendValue, mineruBaseUrl,
+                mineruTier, mineruTimeout, false);
+    }
+
     @Bean
     public cn.studykid.rag.premise.PremisePreprocessor premisePreprocessor(
             DocumentParserPort parserPort,
             @Value("${rag.premise.parse-backend:docling}") String backendValue,
             @Value("${rag.premise.mineru.base-url:}") String mineruBaseUrl,
             @Value("${rag.premise.mineru.tier:standard}") String mineruTier,
-            @Value("${rag.premise.mineru.timeout-seconds:600}") int mineruTimeout) {
+            @Value("${rag.premise.mineru.timeout-seconds:600}") int mineruTimeout,
+            @Value("${rag.premise.page-routing.enabled:false}") boolean pageRoutingEnabled) {
         cn.studykid.rag.premise.spi.DocumentParseBackend parseBackend =
                 switch (backendValue == null ? "" : backendValue.trim().toLowerCase()) {
                     case "", "docling" -> {
@@ -244,6 +256,33 @@ public class LocalRagPortsConfig {
                             "未知解析后端: " + backendValue
                                     + "（合法值: docling / mineru）");
                 };
+
+        // ⚠️ 页级路由灰度（默认关闭，既有装配行为不变）。
+        // 启用后：primary 仍按上面的 parse-backend 选择，escalation 固定为 MinerU。
+        // fail-closed：primary 已经是 MinerU（无更贵档位可升）或未配 MinerU 端点 → 拒绝装配。
+        if (pageRoutingEnabled) {
+            String normalized = backendValue == null ? "" : backendValue.trim().toLowerCase();
+            if ("mineru".equals(normalized)) {
+                throw new IllegalStateException(
+                        "rag.premise.page-routing.enabled=true 且 parse-backend=mineru："
+                                + "已是最贵档位，无可升级后端——拒绝装配");
+            }
+            if (mineruBaseUrl == null || mineruBaseUrl.isBlank()) {
+                throw new IllegalStateException(
+                        "rag.premise.page-routing.enabled=true 但 rag.premise.mineru.base-url "
+                                + "未配置——复杂页无法升级，拒绝装配");
+            }
+            var escalation = new cn.studykid.rag.infrastructure.premise.MineruPremiseBackend(
+                    mineruBaseUrl, mineruTier, mineruTimeout);
+            var router = new cn.studykid.rag.premise.routing.PageRouter(
+                    cn.studykid.rag.premise.routing.RoutingConfig.productionDefault());
+            parseBackend = new cn.studykid.rag.premise.routing.RoutingParseBackend(
+                    parseBackend, escalation, router);
+            log.info("[RAG] 页级路由已启用：primary={}（轻量），escalation=mineru（复杂页升级），"
+                            + "扫描件隔离；阈值={}（初始工程值，待 D08 SG-2 标定）",
+                    backendValue, router.config());
+        }
+
         var headingChunker = new cn.studykid.rag.premise.chunker.HeadingHierarchyChunker();
         // 阶段 2.2：HybridChunker 已真实接入（Python 分块桥 deploy/docling/chunk_service）；
         // 桥不可用时调用即抛 fail-closed 异常，可用性探测交给运维探活。

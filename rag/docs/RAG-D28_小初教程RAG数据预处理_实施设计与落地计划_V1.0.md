@@ -36,8 +36,11 @@ D27 的**主线方向正确**（版面解析 + 教学语义归一化 + 父子块
 | — | **P0-1/P0-2** 配置默认统一 + typed 配置 | ⬜ | **刻意不提前做**：yml 默认 `1024/vector` 是 IT 探针库（vector(1024)）的依赖；提前改 halfvec 会打断全部 IT。须与 P3-5 换维 + 库列迁移同步。`LocalRagPortsConfig` 已用 `@Value` + 装配期 fail-closed 实现「未知值抛错」，typed 配置类留到接线点一起做，避免空转 |
 | — | **P0-4/P0-5** 真实语料基准集 / 黄金集 | ⬜ | 硬依赖数据 owner 授权 + 非实现方标注（D-A/D-G），AI 不能代签；当前只有合成结构夹具 |
 | — | **P0-6** CI 门禁 + 反证 | 🟡 | D-F 孤儿检测与标注纪律断言已在批 1 落地；G-1~G-9 全量门禁待 P0-5 case 就位 |
+| 批 2 | **P1-1** 页级路由 + **P1-2** 解析质量分 | ✅ | 新增 `RouteProfile`/`PageSignals`/`PageRoute`/`RoutingConfig`/`PageRouter`/`ParseQualityScorer`/`RoutingParseBackend`/`PageQuarantineException`；`ParseTrace` 补 `elapsedMs`/`routeReason`/`qualityScore`/`pageRoutes`（第 4 项是为「升级路径可观测」补的页级明细，供后续 `route_trace` jsonb 落库）。`PageRouterTest` 9 + `ParseQualityScorerTest` 5 + `RoutingParseBackendTest` 6 + `PageRoutingWiringTest` 5 全绿；**撤点反证**：把升级合并改成回退 primary → 2 例立即转红，恢复+clean 重建全绿。灰度开关 `rag.premise.page-routing.enabled=false` 默认关闭，启用时无 MinerU 端点/primary 已是 MinerU 均装配期 fail-closed |
 
-> **下一步**：批 2 从 P1-1/P1-2（页级路由 + 解析质量分）切入——这是纯 Java、可单测、且不依赖真实语料授权的关键路径起点；P0-4/P0-5 并行等待数据授权与标注资源。
+> **实现决策（批 2）**：路由信号从 primary（轻量）**已解析块**推导（`PageSignals.of`），不二次解析 PDF 字节——「先用便宜路径」的零额外成本落点；升级后端只在存在 HEAVY 页时调用一次整册。混合后端时强制清空 `doclingJsonRef`，避免 `HybridChunkerClient` 拿过期 Docling JSON 切出错位块。阈值 `RoutingConfig.productionDefault()` 是**初始工程值**，须在真实教材基准集上标定（D08 SG-2），不得为让某册通过而临时放水。
+>
+> **下一步**：批 3 从 P1-3（IR 三件套：`bbox`/`confidence` 真实赋值 + Markdown 落盘 + 原页缓存）切入；P0-4/P0-5 并行等待数据授权与标注资源。
 
 ### 0.2 三类读者怎么读
 
