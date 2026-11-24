@@ -158,15 +158,53 @@ public final class JwtTokenService {
     public Issued issueDetailed(TenantContext context,
                                 java.time.Instant now,
                                 java.time.Duration ttl) {
+        return issueDetailed(context, java.util.Map.of(), now, ttl);
+    }
+
+    /**
+     * 签发并附带<b>额外声明</b>（代理票通道：capability / channel / scope 等）。
+     *
+     * <p><b>为什么是重载而不是新签发器</b>：代理票与执行票同 audience、同密钥、
+     * 同验签路径（Q3：复用执行票结构），差异只在 claims 里多了
+     * {@code capability} / {@code channel} / {@code scope} 三个绑定维度 ——
+     * 把差异收敛到「额外声明」这一个变量上，避免第二套签发器漂移。
+     *
+     * <p>⚠️ 额外声明只会原样进入 payload（字符串化），<b>不参与</b> {@link #verify}
+     * 的上下文构造；下游拿到 claims 后应映射为
+     * {@code TicketClaims}（capability/channel/scope 三元组匹配）再裁决。
+     *
+     * @param context     认证上下文（主体 / 租户 / 角色 / authz_version）
+     * @param extraClaims 额外声明；key 为 claim 名，value 必须是字符串或数字
+     * @param now         签发时刻
+     * @param ttl         有效期；必须为正
+     */
+    public Issued issueDetailed(TenantContext context,
+                                java.util.Map<String, Object> extraClaims,
+                                java.time.Instant now,
+                                java.time.Duration ttl) {
         if (context == null || now == null) {
             throw new IllegalArgumentException("签发参数不能为空");
         }
         if (ttl == null || ttl.isNegative() || ttl.isZero()) {
             throw new IllegalArgumentException("本次签发的有效期必须为正");
         }
+        if (extraClaims == null) {
+            throw new IllegalArgumentException("extraClaims 不能为空（无额外声明请用两参重载）");
+        }
         long iat = now.getEpochSecond();
         long exp = now.plus(ttl).getEpochSecond();
         String jti = java.util.UUID.randomUUID().toString();
+
+        StringBuilder extras = new StringBuilder();
+        for (java.util.Map.Entry<String, Object> e : extraClaims.entrySet()) {
+            Object value = e.getValue();
+            if (value instanceof Number n) {
+                extras.append(",\"").append(escape(e.getKey())).append("\":").append(n);
+            } else {
+                extras.append(",\"").append(escape(e.getKey())).append("\":\"")
+                        .append(escape(String.valueOf(value))).append("\"");
+            }
+        }
 
         String header = "{\"alg\":\"" + ALGORITHM + "\",\"typ\":\"JWT\",\"kid\":\"" + kid + "\"}";
         String payload = "{"
@@ -179,6 +217,7 @@ public final class JwtTokenService {
                 + "\"tenant_id\":\"" + escape(context.tenantId()) + "\","
                 + "\"roles\":[" + joinRoles(context.roles()) + "],"
                 + "\"authz_version\":" + context.authzVersion()
+                + extras
                 + "}";
 
         String signingInput = ENCODER.encodeToString(

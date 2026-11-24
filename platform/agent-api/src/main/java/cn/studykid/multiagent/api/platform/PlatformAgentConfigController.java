@@ -27,7 +27,6 @@ import cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService.Confi
 import cn.studykid.multiagent.application.cap.ConfigPublishWorkflowService;
 import cn.studykid.multiagent.core.cap.CapAgentDef;
 import cn.studykid.multiagent.core.cap.ConfigPublishRequest;
-import cn.studykid.multiagent.core.cap.ConfigRelease;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort;
 import cn.studykid.multiagent.ports.audit.PlatformAuditPort.PlatformAuditEvent;
 import cn.studykid.multiagent.ports.persistence.AgentManagePort;
@@ -167,24 +166,21 @@ public class PlatformAgentConfigController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "agents 不能为空");
         }
         requireReason(request.reason());
-        // tenantId 留空 = 全局 Agent 走 PLATFORM 作用域（平台运维通道）发布；
-        // 给了则走现有 TENANT 作用域，行为不变。
+        // ⚠️ <b>Agent 一律走平台运维通道</b>（2026-11-22）：
+        //    Agent 是**全局实体**（cap_agent_def 无 tenant_id），租户只是通过
+        //    tenant_agent_binding 与之多对多绑定。此前 tenantId 有值时会分流到
+        //    租户通道（scope=TENANT），导致同一份 Agent 定义出现两条写入路径：
+        //      · 版本行归属/可见性口径不同（一条受 RLS + 绑定过滤，一条全局）；
+        //      · 「提交即建草稿版本」等能力要在两处各实现一遍，必然漂移。
+        //    现在 tenantId 只作为**分配提示**保留在请求里，不再决定走哪条通道。
         String tenantId = isBlank(request.tenantId()) ? null : request.tenantId().trim();
         if (tenantId != null && !isUuid(tenantId)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenantId 须为 UUID 或留空");
         }
         try {
-            ConfigPublishRequest created;
-            if (tenantId == null) {
-                created = requirePlatformPublisher().requestPublishAgents(
-                        toAgentSpecs(request.agents()), request.expectedPublishSeq(),
-                        request.reason().trim(), principal.userId());
-            } else {
-                created = workflow.requestPublish(
-                        tenantId, ConfigRelease.Scope.TENANT,
-                        toAgentSpecs(request.agents()), request.expectedPublishSeq(),
-                        request.reason().trim(), principal.userId());
-            }
+            ConfigPublishRequest created = requirePlatformPublisher().requestPublishAgents(
+                    toAgentSpecs(request.agents()), request.expectedPublishSeq(),
+                    request.reason().trim(), principal.userId());
             recordAudit(principal, "agent_config.publish.request", tenantId, created.requestId());
             return ResponseEntity.ok(RequestDto.of(created));
         } catch (IllegalArgumentException e) {
@@ -203,28 +199,37 @@ public class PlatformAgentConfigController {
             @RequestBody @Nullable LifecycleRequestView request) {
         security.require(principal, Namespaces.Platform.RESOURCE_MANAGE,
                 "agent_config", request == null ? null : request.tenantId());
-        requireTenant(request == null ? null : request.tenantId());
         requireReason(request == null ? null : request.reason());
-        if (request.objectId() == null || request.objectId().isBlank()
+        if (request == null || request.objectId() == null || request.objectId().isBlank()
                 || request.version() == null || request.version() <= 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "objectId 与正整数 version 必填");
+        }
+        // ⚠️ <b>Agent 一律走平台运维通道</b>（与 requestPublish 同口径，2026-11-22）：
+        //    Agent 是全局实体，cap_agent_def 无 tenant_id；停用按 (agent_id, version)
+        //    全局寻址。tenantId 只作**分配提示**保留在请求里（校验格式 + 进审计），
+        //    不再决定走哪条通道。
+        String tenantId = request.tenantId() == null || isBlank(request.tenantId())
+                ? null : request.tenantId().trim();
+        if (tenantId != null && !isUuid(tenantId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenantId 须为 UUID 或留空");
         }
         // ⚠️ 只允许停用：type 固定 agent、to 固定 DEPRECATED、expectedFrom 由调用方给（CAS）。
         String from = request.expectedFrom() == null || request.expectedFrom().isBlank()
                 ? "PUBLISHED" : request.expectedFrom().trim();
         try {
-            ConfigPublishRequest created = workflow.requestLifecycle(
-                    request.tenantId().trim(), ConfigRelease.Scope.TENANT,
+            ConfigPublishRequest created = requirePlatformPublisher().requestLifecycle(
                     new cn.studykid.multiagent.application.cap.ConfigPublishPayload.LifecycleSpec(
                             "agent", request.objectId().trim(), request.version(),
                             from, "DEPRECATED"),
                     request.reason().trim(), principal.userId());
-            recordAudit(principal, "agent_config.deprecate.request",
-                    request.tenantId().trim(), created.requestId());
+            recordAudit(principal, "agent_config.deprecate.request", tenantId, created.requestId());
             return ResponseEntity.ok(RequestDto.of(created));
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (IllegalStateException e) {
+            // 平台运维通道未装配（fail-closed）→ 503，明确「环境缺凭据」而非业务失败。
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
         }
     }
 

@@ -86,8 +86,6 @@
         ORDER BY av.version_number DESC
     </select>
 
-</mapper>
-
     <!--
       DELETE_UNPUBLISHED_VERSIONS：删除某 Agent 的未发布草稿版本（published_at IS NULL）。
       ⚠️ 仅删草稿：已发布版本（线上生效过）是可解释历史，不可动。
@@ -102,3 +100,5 @@
                          AND b.agent_id = av.agent_id
                          AND b.status = 'ACTIVE')
     </delete>
+
+</mapper>

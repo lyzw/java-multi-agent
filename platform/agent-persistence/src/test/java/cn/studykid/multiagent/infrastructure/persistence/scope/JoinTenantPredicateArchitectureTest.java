@@ -84,6 +84,23 @@ class JoinTenantPredicateArchitectureTest {
             "agent", "agent_version", "cap_agent_def",
             "cap_agent_child_ref", "execution_snapshot");
 
+    /**
+     * 双作用域表（{@code tenant_id} 可空）：只在<b>平台运维会话窗</b>
+     * （{@code platformOps.inPlatformScopeSession}）里读，豁免租户谓词要求。
+     *
+     * <p>登记条件（缺一不可）：
+     * <ol>
+     *   <li>{@code tenant_id} 可空 —— PLATFORM 作用域行的租户谓词恒假，
+     *       强加谓词会静默丢掉全局申请（平台控制台注册表的「已修改未发布」聚合
+     *       必须同时看到 PLATFORM 与各租户的申请单）；</li>
+     *   <li>该查询只出现在平台链只读端点内（{@code platform.resource.read} 闸门 +
+     *       运维会话窗），租户链不可达 —— 访问控制由通道闸门承担，
+     *       与 {@code platform.*} 表同级。</li>
+     * </ol>
+     */
+    private static final Set<String> OPS_SESSION_ONLY_TABLES = Set.of(
+            "cap_config_publish_request");
+
     /** LATERAL 子查询的数据来源：用它判断该派生表读的是全局表还是租户表。 */
     private static final Pattern FROM =
             Pattern.compile("(?i)\\bFROM\\s+([A-Za-z_][\\w.]*)");
@@ -310,7 +327,9 @@ class JoinTenantPredicateArchitectureTest {
     private static boolean isExemptJoin(Matcher m, String window) {
         if (m.group(0).toUpperCase().contains("LATERAL")) {
             Matcher from = FROM.matcher(window);
-            return from.find() && isExemptTable(from.group(1));
+            return from.find() && (isExemptTable(from.group(1))
+                    // 双作用域表：仅在平台运维会话窗里读的豁免（见 OPS_SESSION_ONLY_TABLES）
+                    || OPS_SESSION_ONLY_TABLES.contains(normalize(from.group(1))));
         }
         return isExemptTable(m.group(2));
     }

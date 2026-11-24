@@ -29,6 +29,22 @@ vi.mock('@/api/metricsApi', async () => {
   }
 })
 
+/** 筛选器数据源（租户 / Agent 下拉）来自 adminApi —— 单测只给最小清单。 */
+vi.mock('@/api/adminApi', async () => {
+  const actual = await vi.importActual<typeof import('@/api/adminApi')>('@/api/adminApi')
+  return {
+    ...actual,
+    getPlatformTenants: vi.fn().mockResolvedValue([
+      { tenantId: 't-uuid-1', name: '租户一', slug: 't1' },
+      { tenantId: 't-uuid-2', name: '租户二', slug: 't2' },
+    ]),
+    getConsoleAgentRegistry: vi.fn().mockResolvedValue([
+      { agentId: 'a-1', name: '助手一', tenantId: 't-uuid-1' },
+      { agentId: 'a-2', name: '助手二', tenantId: 't-uuid-2' },
+    ]),
+  }
+})
+
 import {
   fetchAgentMetricOverview,
   fetchTerminationDistribution,
@@ -103,7 +119,8 @@ function stubDefaults(): void {
  * ⚠️ antd v5 必须先 mouseDown 才展开，选项渲染在 body 下的 portal 里。
  */
 async function pickScenario(label: string): Promise<void> {
-  const combobox = screen.getAllByRole('combobox')[0]!
+  // ⚠️ extra Space 里下拉顺序固定：租户(0) → Agent(1) → 场景(2)
+  const combobox = screen.getAllByRole('combobox')[2]!
   fireEvent.mouseDown(combobox, { button: 0 })
   const option = await screen.findByText(label, { selector: '.ant-select-item-option-content' })
   fireEvent.click(option)
@@ -305,5 +322,55 @@ describe('场景筛选 · 整页同口径与失真防护', () => {
     // 筛选器挂了 ≠ 指标挂了：不能整页变成「指标不可用」
     expect(screen.getAllByText('自动校验成功率').length).toBeGreaterThan(0)
     expect(screen.queryAllByText('指标不可用')).toHaveLength(0)
+  })
+})
+
+describe('租户/Agent 筛选 · 平台视角与端点支持差异（批次 2）', () => {
+  /** antd v5 Select 交互：展开 + 点选 portal 里的选项。 */
+  async function pickByLabel(comboboxIndex: number, label: string): Promise<void> {
+    const combobox = screen.getAllByRole('combobox')[comboboxIndex]!
+    fireEvent.mouseDown(combobox, { button: 0 })
+    const option = await screen.findByText(label, { selector: '.ant-select-item-option-content' })
+    fireEvent.click(option)
+  }
+
+  it('未选租户/Agent 时请求不带 tenantId/agentId 参数（默认平台跨租户视角）', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getAllByText('自动校验成功率').length).toBeGreaterThan(0)
+    })
+    // ⚠️ toEqual 忽略 undefined 属性：filter 里的空值不会拼进 URL
+    expect(lastArgs(vi.mocked(fetchAgentMetricOverview).mock)[1]).toEqual({})
+    expect(lastArgs(vi.mocked(fetchMetricScenarios).mock)[1]).toBeUndefined()
+    // 默认视角标注必须显式可见（改造点 2-2-1）
+    expect(screen.getAllByText(/平台视角（跨租户聚合）/).length).toBeGreaterThan(0)
+    expect(screen.queryAllByText(/当前统计范围：租户/)).toHaveLength(0)
+  })
+
+  it('选租户+Agent 后按端点支持范围传参：anomalies/tools 不吃力不讨好地塞不支持的参数', async () => {
+    renderPage()
+    await waitFor(() => {
+      expect(screen.getAllByText('自动校验成功率').length).toBeGreaterThan(0)
+    })
+
+    // 下拉顺序：租户 → Agent → 场景（extra Space 声明顺序）
+    await pickByLabel(0, '租户一')
+    await pickByLabel(1, '助手一')
+
+    const expected = { tenantId: 't-uuid-1', agentId: 'a-1' }
+    await waitFor(() => {
+      expect(lastArgs(vi.mocked(fetchAgentMetricOverview).mock)[1]).toEqual(expected)
+    })
+    // overview / terminations / latency 支持租户+Agent
+    expect(lastArgs(vi.mocked(fetchTerminationDistribution).mock)[1]).toEqual(expected)
+    expect(lastArgs(vi.mocked(fetchLatency).mock)[1]).toEqual(expected)
+    // ⚠️ tools 仅支持租户；agentId 硬塞会被后端静默忽略 —— 造成静默错配
+    expect(lastArgs(vi.mocked(fetchToolBreakdown).mock)[1]).toEqual({ tenantId: 't-uuid-1' })
+    // ⚠️ anomalies 仅支持场景 —— 租户/Agent 不得混入
+    expect(lastArgs(vi.mocked(fetchAnomalies).mock)[2]).toEqual({})
+    // 覆盖差异必须显式标注，不能让读者误以为所有面板都收窄了
+    expect(screen.getAllByText(/当前统计范围：租户 = 租户一 · Agent = 助手一/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/异常明细暂不支持租户\/Agent 筛选/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/平台视角 · 已收窄到指定租户/).length).toBeGreaterThan(0)
   })
 })

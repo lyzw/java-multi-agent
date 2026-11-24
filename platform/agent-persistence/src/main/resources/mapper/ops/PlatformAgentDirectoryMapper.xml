@@ -135,7 +135,7 @@
                             SELECT to_jsonb(d)
                             FROM cap_agent_def d
                             WHERE d.agent_id = #{agentId}::uuid
-                              AND d.version < pr.target_version
+                              AND d.version &lt; pr.target_version
                             ORDER BY d.version DESC
                             LIMIT 1
                         )::text

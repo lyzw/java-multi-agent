@@ -459,11 +459,30 @@ class PlatformCapabilityPublishServiceTest {
     @Test
     @DisplayName("⛔ 生命周期迁移的对象类型闸门：租户级对象不走平台通道")
     void lifecycleRejectsTenantScopedTypes() {
+        // ⚠️ agent 是全局实体（cap_agent_def 无 tenant_id），已纳入平台通道（2026-11-22）；
+        //    仍然被闸门拒绝的是真正按 (tenant_id, id) 寻址的租户级对象。
         assertThatThrownBy(() -> service().requestLifecycle(
-                new ConfigPublishPayload.LifecycleSpec("agent", "agent-1", 1,
+                new ConfigPublishPayload.LifecycleSpec("result_contract", "rc-1", 1,
                         "PUBLISHED", "DEPRECATED"), "停用", REQUESTER))
                 .isInstanceOf(ConfigPublishRejectedException.class)
                 .hasMessageContaining("平台通道只管理平台级对象");
+    }
+
+    @Test
+    @DisplayName("✅ 生命周期迁移：agent 全局停用走平台通道（tenantId=null，按 agent_id+version 寻址）")
+    void lifecycleDeprecatesGlobalAgent() {
+        when(lifecycle.transition(any(), any(), any(), anyInt(), any(), any()))
+                .thenReturn(true);
+
+        service().requestLifecycle(new ConfigPublishPayload.LifecycleSpec("agent", "agent-1", 1,
+                "PUBLISHED", "DEPRECATED"), "停用", REQUESTER);
+        String requestId = requests.rows.keySet().iterator().next();
+        service().decide(requestId, ConfigPublishRequestPort.Decision.APPROVE, "同意", APPROVER);
+        service().apply(requestId, APPROVER);
+
+        // agent 分支以 tenantId=null 全局寻址（cap_agent_def 无 tenant_id 列）
+        verify(lifecycle).transition(eq("agent"), eq(null), eq("agent-1"), eq(1),
+                eq(ConfigLifecycleState.PUBLISHED), eq(ConfigLifecycleState.DEPRECATED));
     }
 
     @Test

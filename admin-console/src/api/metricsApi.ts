@@ -129,6 +129,12 @@ export interface MetricFilter {
   /** 精确场景标签；后端把「未标注」组映射成专用哨兵值，由 /scenarios 下发。 */
   scenario?: string
   tenantId?: string
+  /**
+   * 精确 Agent 过滤（后端 overview / terminations / latency 支持，required=false）。
+   * ⚠️ /tools 与 /anomalies 端点不支持该参数 —— 调用方不得把它传给这两个端点，
+   * 否则会造成「总览已按 Agent 收窄、其余面板仍全量」的静默错配。
+   */
+  agentId?: string
 }
 
 /** 场景枚举项。value 可直接回填给 MetricFilter.scenario，label 由后端给出可读文字。 */
@@ -142,6 +148,7 @@ function metricQuery(hours: number, filter: MetricFilter, extra: Record<string, 
   return query({
     hours: String(hours),
     tenantId: filter.tenantId,
+    agentId: filter.agentId,
     scenario: filter.scenario,
     ...extra,
   })

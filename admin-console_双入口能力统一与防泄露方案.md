@@ -360,5 +360,5 @@ Agent 对话 → 编排器决定调用工具 rag.corpus.ingest
 
 1. **未改 RAG 侧代码**：RAG 是独立 Maven 构建、不依赖 `agent-ports`，且其 G/T/A 三档 + `X-Rag-Scope` + `rag_ops` 会话窗已是 fail-closed（既有反证 102+39 项）。本方案在**平台侧**完成判定收口；RAG 数据面保持原样，不重复造轮子。
 2. **未给 `PlatformAuditEvent` 加 DB CHECK**：capability/channel 为自由文本，由代码侧 `Capability` 注册表约束；如后续要求库侧强约束，可追加 CHECK（需与 `ticket_scope` 同样的规范集纪律，避免 503 变 500）。
-3. **代理票尚未接真实签发**：`TicketBroker.delegationClaims()` 产出规格，实际 JWT 签发仍由调用方交给既有 `JwtTokenService`；Agent 代写链路的工具层接入属下一增量（本刀先把判定闸门与票据语义统一，避免边接入边漂移）。
+3. **代理票已接真实签发（2026-11-22 增量），编排工具层消费待代写工具落地**：`DelegationTicketService`（agent-api）已实现真实 JWT 签发 —— 绑定父主体/目标租户（Agent 自报一律拒）、CapabilityRegistry + PolicyGate 七闸门前置裁决（预览声明自洽自检）、复用执行票结构 + `capability`/`channel`/`scope` claim（Q3，`JwtTokenService.issueDetailed` 新增 extraClaims 重载）、TTL 60s；`PolicyGate` 已注册为全进程单例 Bean（AgentChatConfiguration）。**工具层接入边界**：编排层（AgentChatOrchestrator）当前只有读检索（agent.chat.orchestrate，requiresTicket=false，无需代理票）；`rag.corpus.ingest` 代写工具落地时再消费本服务（防"边接入边漂移"）。
 4. **DDL 补丁需 DBA 在存量库执行**：dev 库可整体重置（新 DDL 已含两列）；存量库按 `patch_platform_audit_capability_channel.sql` 幂等升级。

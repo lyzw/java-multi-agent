@@ -20,9 +20,12 @@
  *   <li><b>轮询而非 SSE</b>：`EventSource` 无法带 Authorization 头，
  *       票证解决的是「能否拿到租户身份」，<b>不解决</b>「凭据不落 URL」——
  *       令牌入 query 会写进访问日志与 Referer，所以这里依旧轮询。</li>
- *   <li><b>票证的租户必须是被测 Agent 的租户</b>：租户来自票证而非请求体，
- *       给 A 租户取票去跑 B 租户的 Agent 只会在执行时授权那一步被拒。
- *       故取票对象由选中 Agent 的 `tenantId` 决定，上方的租户下拉只是注册表过滤器。</li>
+ *   <li><b>票证的租户由「执行租户」显式选择</b>：租户来自票证而非请求体，
+ *       且不再由被测 Agent 反推 —— 执行租户是<b>独立显式输入</b>，兼作注册表过滤器。
+ *       「选 Agent」不再被当成整个页面的准入门槛，只是「发起执行」的参数之一；
+ *       若选中的 Agent 不属于执行租户，前端在发起前就拦截（跨租户执行必然
+ *       在「执行时授权」那一步被拒，与其到后端吃一个语义模糊的 403，
+ *       不如把错配直接摆在用户面前）。</li>
  * </ol>
  */
 
@@ -43,6 +46,7 @@ import {
   Table,
   Tag,
   Timeline,
+  Tooltip,
   Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -140,7 +144,12 @@ function newIdempotencyKey(): string {
 
 export function AgentLabPage(): JSX.Element {
   const [tenants, setTenants] = useState<PlatformTenant[]>([])
-  const [tenantId, setTenantId] = useState('')
+  /**
+   * 执行租户（票证租户）—— 与「注册表过滤器」本就是一回事（批次 1 松绑改造后合并）：
+   * 选定即同时决定「Agent 列表按谁过滤」与「票证绑到谁」；留空 = 只浏览、不可执行。
+   * ⚠️ 不再由被测 Agent 反推：给 A 租户取票跑 B 租户的 Agent 必然在执行时被拒。
+   */
+  const [executionTenantId, setExecutionTenantId] = useState('')
   const [agents, setAgents] = useState<PlatformAgentRegistryItem[]>([])
   const [agentsError, setAgentsError] = useState<string | null>(null)
   const [agentId, setAgentId] = useState('')
@@ -204,7 +213,9 @@ export function AgentLabPage(): JSX.Element {
     const run = async (): Promise<void> => {
       setAgentsError(null)
       try {
-        const list = await getConsoleAgentRegistry(tenantId ? { tenantId } : undefined)
+        const list = await getConsoleAgentRegistry(
+          executionTenantId ? { tenantId: executionTenantId } : undefined,
+        )
         if (cancelled) return
         setAgents(list)
       } catch (cause) {
@@ -217,7 +228,7 @@ export function AgentLabPage(): JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [tenantId])
+  }, [executionTenantId])
 
   const agentOptions = useMemo(
     () =>
@@ -258,13 +269,13 @@ export function AgentLabPage(): JSX.Element {
   )
 
   /**
-   * 票证的租户上下文 = <b>被测 Agent 所属租户</b>，不是上方过滤下拉的值。
+   * 票证的租户上下文 = <b>执行租户</b>（显式选择），不再由被测 Agent 反推。
    *
-   * ⚠️ 租户来自验签令牌，请求体里不允许出现 tenantId。给 A 租户取票去跑 B 租户的
-   *    Agent，只会在「执行时授权」那一步被拒；把票证绑到 Agent 自己的租户，
-   *    界面才能说出「以谁的身份、在哪个租户执行」这句真话。
+   * ⚠️ 租户来自验签令牌，请求体里不允许出现 tenantId。执行租户与被测 Agent
+   *    的租户不一致时，前端在 execute() 入口就拦截 —— 与其让用户到
+   *    「执行时授权」那一步吃一个语义模糊的 403，不如把错配摆在面前。
    */
-  const ticketTenantId = selectedAgent?.tenantId ?? ''
+  const ticketTenantId = executionTenantId
 
   // ⚠️ 换上下文即作废：旧票属于上一个租户/身份，绝不复用（也避免审计里
   //    「一次执行挂在两个被扮演身份上」的歧义）。
@@ -417,6 +428,18 @@ export function AgentLabPage(): JSX.Element {
     setCurrent(null)
     setSubmitting(true)
     try {
+      // ⚠️ 跨租户错配前置拦截（本批次最关键的正确性改动）：票证绑定执行租户，
+      //    被测 Agent 却属于另一个租户时，执行必然在「执行时授权」被拒 ——
+      //    前端先拦，错误文案把两个租户 id 都说清楚。
+      if (selectedAgent !== null && selectedAgent.tenantId !== executionTenantId) {
+        setErrorKind('input')
+        setErrorText(
+          `被测 Agent 属于租户 ${selectedAgent.tenantId}，与执行租户 ${executionTenantId} 不一致：` +
+            '票证绑定的是执行租户，跨租户执行会在「执行时授权」那一步被拒。' +
+            '请把执行租户切换为该 Agent 所属租户，或重新选择 Agent。',
+        )
+        return
+      }
       if (ticketTenantId === '' || loginName === '') {
         // 兜底：按钮已禁用，走到这里说明上下文被并发清空了。
         setErrorKind('ticket')
@@ -563,19 +586,22 @@ export function AgentLabPage(): JSX.Element {
       <Card title="执行参数" size="small">
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <Space wrap>
-            <Text>租户（可选过滤）</Text>
+            <Text>执行租户</Text>
             <Select
               showSearch
               allowClear
               style={{ width: 300 }}
-              placeholder="按租户过滤 Agent 注册表"
-              value={tenantId || undefined}
-              onChange={(v) => setTenantId(v ?? '')}
+              placeholder="选择执行租户（票证绑到这里，并过滤 Agent 列表）"
+              value={executionTenantId || undefined}
+              onChange={(v) => setExecutionTenantId(v ?? '')}
               options={tenants.map((t) => ({ value: t.tenantId, label: `${t.name}（${t.slug}）` }))}
               filterOption={(inp, opt) =>
                 String(opt?.label ?? '').toLowerCase().includes(inp.toLowerCase())
               }
             />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              票证租户 = 执行租户；留空只能浏览 Agent，不能发起执行
+            </Text>
           </Space>
 
           <Space wrap>
@@ -600,7 +626,7 @@ export function AgentLabPage(): JSX.Element {
               style={{ width: 420 }}
               placeholder={
                 ticketTenantId === ''
-                  ? '先选择 Agent：票证绑到该 Agent 所属租户'
+                  ? '先选择执行租户：票证绑定执行租户，不再由被测 Agent 反推'
                   : '指名一个 ACTIVE 租户成员（票证扮演谁）'
               }
               value={loginName || undefined}
@@ -612,7 +638,7 @@ export function AgentLabPage(): JSX.Element {
               }
               notFoundContent={
                 ticketTenantId === ''
-                  ? '未选择 Agent'
+                  ? '未选择执行租户'
                   : principalsError !== null
                     ? '读取成员失败，无法取票'
                     : '该租户没有 ACTIVE 成员'
@@ -638,7 +664,16 @@ export function AgentLabPage(): JSX.Element {
 
           {selectedAgent && (
             <Descriptions size="small" bordered column={3}>
-              <Descriptions.Item label="租户">
+              {/* 改动点 1-8：执行租户与被测 Agent 租户并排展示，错配一眼可见 */}
+              <Descriptions.Item label="执行租户">
+                <Text code>{executionTenantId === '' ? '未选择' : executionTenantId}</Text>
+                {selectedAgent.tenantId !== executionTenantId && (
+                  <Tag color="red" style={{ marginLeft: 8 }}>
+                    ⚠️ 与被测 Agent 租户不一致，不能发起执行
+                  </Tag>
+                )}
+              </Descriptions.Item>
+              <Descriptions.Item label="被测 Agent 租户">
                 <Text code>{selectedAgent.tenantId}</Text>
               </Descriptions.Item>
               <Descriptions.Item label="定义版本">
@@ -650,7 +685,7 @@ export function AgentLabPage(): JSX.Element {
               <Descriptions.Item label="最新发布版本">
                 {selectedAgent.latestVersionNumber ?? '—'}
               </Descriptions.Item>
-              <Descriptions.Item label="启用技能" span={2}>
+              <Descriptions.Item label="启用技能">
                 {selectedAgent.enabledSkills.length === 0 ? (
                   <Text type="secondary">—</Text>
                 ) : (
@@ -688,14 +723,32 @@ export function AgentLabPage(): JSX.Element {
               onChange={(v) => setBudgetAmount(v ?? null)}
               placeholder="留空=不限"
             />
-            <Button
-              type="primary"
-              loading={submitting}
-              disabled={agentId === '' || input.trim() === '' || loginName === ''}
-              onClick={() => void execute()}
-            >
-              发起执行
-            </Button>
+            {(() => {
+              // 改动点 1-3：禁用时把「缺的是哪一项」说清楚，而不是笼统的「请选择」。
+              const missing: string[] = []
+              if (executionTenantId === '') missing.push('执行租户')
+              if (agentId === '') missing.push('被测 Agent')
+              if (input.trim() === '') missing.push('用例输入')
+              if (loginName === '') missing.push('租户身份（取票）')
+              const button = (
+                <Button
+                  type="primary"
+                  loading={submitting}
+                  disabled={missing.length > 0}
+                  onClick={() => void execute()}
+                >
+                  发起执行
+                </Button>
+              )
+              return missing.length > 0 ? (
+                <Tooltip title={`还缺：${missing.join('、')} —— 补齐后才能发起执行`}>
+                  {/* disabled 按钮不触发鼠标事件，须包一层 span 才能浮出 Tooltip */}
+                  <span>{button}</span>
+                </Tooltip>
+              ) : (
+                button
+              )
+            })()}
           </Space>
         </Space>
       </Card>

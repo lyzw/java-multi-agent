@@ -2,7 +2,7 @@
 -- platform 完整结构（pg_dump --schema-only 导出）
 -- 【来源】迁移脚本 V1→V34 在全新空库上逐个实跑（0 错误）后 pg_dump 导出，
 --   再在第二个空库复放验证结构等价（78 表 / 680 列 / 255 约束 / 15 枚举 /
---   15 函数 / 33 触发器 / 44 RLS 开启 / 57 RLS 策略）。
+--   15 函数 / 33 触发器 / 44 RLS 开启 / 61 RLS 策略）。
 --   ⚠️ 2026-11-20 发布流程管理（09_cap_publish_workflow_upgrade.sql 并入终态）：
 --   +3 表 public.cap_publish_policy / cap_config_draft / cap_audit_log
 --        （均 FORCE RLS，+3 开启；共 +8 策略）
@@ -25,9 +25,12 @@
 --   ⚠️ 2026-11-15 更正（P0）：原头注释写「65 表 / 42 RLS 开启 / 50 RLS 策略」，
 --   是 V1→V34 快照时的旧值，后续增量加了 student_memory 等对象后已漂移。
 --   本文件实计 CREATE TABLE = 78、ENABLE/FORCE ROW LEVEL SECURITY = 44、
---   CREATE POLICY = 62，与 scripts/it-env.sh --probe 的期望值（表 78 / RLS 44 /
---   策略 57）交叉一致。这三项由 PlatformDdlHeaderCountTest 静态守卫钉死：
+--   CREATE POLICY = 61，与 scripts/it-env.sh --probe 的期望值（表 78 / RLS 44 /
+--   策略 61）交叉一致。这三项由 PlatformDdlHeaderCountTest 静态守卫钉死：
 --   改动 DDL 却忘同步头注释，或有人把数字改回旧值，守卫立刻变红。
+--   ⚠️ 2026-11-22 重计（守卫红后更正）：实计 CREATE POLICY = 61（此前头注释写
+--   57）——发布策略补齐（DELETE / UPDATE deny）与 09 增量并入终态两轮改动后
+--   未同步头注释与探针期望值；本次三处（头注释 / it-env.sh / init-db.sh）一并钉到 61。
 --   ⚠️ 其余快照数字沿用 pg_dump 的统计口径（含约束隐式生成的对象），
 --   本次未重新核定，不能拿 grep 行数直接比对；守卫也刻意只校验口径明确的三项，
 --   避免制造恒定假红。

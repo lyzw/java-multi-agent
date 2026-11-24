@@ -116,6 +116,8 @@ class PlatformAgentConfigControllerTest {
             extends cn.studykid.multiagent.application.cap.PlatformCapabilityPublishService {
         int agentPublishCalls;
         List<ConfigPublishPayload.AgentSpec> lastAgents;
+        int lifecycleCalls;
+        ConfigPublishPayload.LifecycleSpec lastLifecycleSpec;
 
         FakePlatformPublisher() {
             super(null, null, null, null, null, null, null, null, java.time.Clock.systemUTC());
@@ -130,6 +132,18 @@ class PlatformAgentConfigControllerTest {
             return new ConfigPublishRequest("req-global", null,
                     ConfigPublishRequest.Operation.PUBLISH, "{}", reason, requesterId,
                     ConfigPublishRequest.State.PENDING, null, null,
+                    Instant.now(), null, null, null, ConfigRelease.Scope.PLATFORM,
+                    null, null, null, null, null);
+        }
+
+        @Override
+        public ConfigPublishRequest requestLifecycle(
+                ConfigPublishPayload.LifecycleSpec spec, String reason, String requesterId) {
+            lifecycleCalls++;
+            lastLifecycleSpec = spec;
+            return new ConfigPublishRequest("req-lifecycle", null,
+                    ConfigPublishRequest.Operation.LIFECYCLE_TRANSITION, "{}", reason,
+                    requesterId, ConfigPublishRequest.State.PENDING, null, null,
                     Instant.now(), null, null, null, ConfigRelease.Scope.PLATFORM,
                     null, null, null, null, null);
         }
@@ -211,13 +225,14 @@ class PlatformAgentConfigControllerTest {
     }
 
     @Test
-    @DisplayName("✅ 发布申请：过 manage 闸门 + 合法 tenantId → 复用工作流并透传 tenantId")
-    void publishDelegatesWithTenantId() {
+    @DisplayName("✅ 发布申请：带 tenantId 也走**平台通道**（Agent 是全局实体，不再分流到租户通道）")
+    void publishGoesThroughPlatformChannelEvenWithTenantId() {
         RecordingAuthorizer auth = new RecordingAuthorizer("platform.resource.manage");
         FakeWorkflow workflow = new FakeWorkflow();
+        FakePlatformPublisher platformPublisher = new FakePlatformPublisher();
         PlatformAgentConfigController controller = new PlatformAgentConfigController(
-                workflow, (AgentManagePort) null, (CapAgentDefPort) null, new FakeBindings(),
-                new PlatformSecurity(auth), NOOP_AUDIT);
+                workflow, platformPublisher, (AgentManagePort) null, (CapAgentDefPort) null,
+                new FakeBindings(), new PlatformSecurity(auth), NOOP_AUDIT);
 
         controller.requestPublish(MANAGER, new PlatformAgentConfigController.PublishRequestView(
                 TENANT,
@@ -227,21 +242,37 @@ class PlatformAgentConfigControllerTest {
                 null, "新增助手"));
 
         assertThat(auth.requested).containsExactly("platform.resource.manage");
-        assertThat(workflow.publishTenants).containsExactly(TENANT);
+        // ⚠️ Agent 一律走平台通道：tenantId 只作分配提示，不再决定写入路径。
+        assertThat(platformPublisher.agentPublishCalls).isEqualTo(1);
+        assertThat(workflow.publishTenants)
+                .as("不得再分流到租户通道 —— 否则同一份 Agent 定义有两条写入路径")
+                .isEmpty();
     }
 
     @Test
-    @DisplayName("✅ 停用申请：type 固定 agent / to 固定 DEPRECATED，透传显式 tenantId")
-    void lifecycleDelegatesWithTenantId() {
+    @DisplayName("✅ 停用申请：带 tenantId 也走**平台通道**（Agent 全局实体，tenantId 只作提示）")
+    void lifecycleGoesThroughPlatformChannelEvenWithTenantId() {
         RecordingAuthorizer auth = new RecordingAuthorizer("platform.resource.manage");
         FakeWorkflow workflow = new FakeWorkflow();
+        FakePlatformPublisher platformPublisher = new FakePlatformPublisher();
         PlatformAgentConfigController controller = new PlatformAgentConfigController(
-                workflow, null, null, new FakeBindings(), new PlatformSecurity(auth), NOOP_AUDIT);
+                workflow, platformPublisher, null, null, new FakeBindings(),
+                new PlatformSecurity(auth), NOOP_AUDIT);
 
         controller.requestLifecycle(MANAGER, new PlatformAgentConfigController.LifecycleRequestView(
                 TENANT, "agent-1", 3, "PUBLISHED", "下线"));
 
-        assertThat(workflow.lifecycleTenants).containsExactly(TENANT);
+        assertThat(auth.requested).containsExactly("platform.resource.manage");
+        // ⚠️ Agent 一律走平台通道：type=agent / to=DEPRECATED 固定，tenantId 不再决定通道。
+        assertThat(platformPublisher.lifecycleCalls).isEqualTo(1);
+        assertThat(platformPublisher.lastLifecycleSpec).isNotNull();
+        assertThat(platformPublisher.lastLifecycleSpec.type()).isEqualTo("agent");
+        assertThat(platformPublisher.lastLifecycleSpec.objectId()).isEqualTo("agent-1");
+        assertThat(platformPublisher.lastLifecycleSpec.version()).isEqualTo(3);
+        assertThat(platformPublisher.lastLifecycleSpec.to()).isEqualTo("DEPRECATED");
+        assertThat(workflow.lifecycleTenants)
+                .as("不得再分流到租户通道 —— cap_agent_def 无 tenant_id，停用按全局寻址")
+                .isEmpty();
     }
 
     @Test
@@ -264,18 +295,21 @@ class PlatformAgentConfigControllerTest {
     }
 
     @Test
-    @DisplayName("⛔ tenantId 非 UUID → 400，工作流零触达（原始 tenantId 不进 SQL）")
+    @DisplayName("⛔ 停用申请 tenantId 非 UUID → 400，平台通道零触达（原始 tenantId 不进 SQL）")
     void nonUuidTenantRejected() {
         RecordingAuthorizer auth = new RecordingAuthorizer("platform.resource.manage");
         FakeWorkflow workflow = new FakeWorkflow();
+        FakePlatformPublisher platformPublisher = new FakePlatformPublisher();
         PlatformAgentConfigController controller = new PlatformAgentConfigController(
-                workflow, null, null, new FakeBindings(), new PlatformSecurity(auth), NOOP_AUDIT);
+                workflow, platformPublisher, null, null, new FakeBindings(),
+                new PlatformSecurity(auth), NOOP_AUDIT);
 
         assertThatThrownBy(() ->
                 controller.requestLifecycle(MANAGER, new PlatformAgentConfigController.LifecycleRequestView(
                         "tenant-alpha-not-uuid", "agent-1", 3, "PUBLISHED", "下线")))
                 .isInstanceOf(ResponseStatusException.class);
         assertThat(workflow.lifecycleTenants).isEmpty();
+        assertThat(platformPublisher.lifecycleCalls).isEqualTo(0);
     }
 
     @Test

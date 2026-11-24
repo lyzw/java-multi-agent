@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Button,
@@ -19,6 +19,8 @@ import {
   Typography,
 } from 'antd'
 import { ApiError } from '@/api/client'
+import { getConsoleAgentRegistry, getPlatformTenants } from '@/api/adminApi'
+import type { PlatformTenant } from '@/api/types'
 import {
   fetchAgentMetricOverview,
   fetchAnomalies,
@@ -118,6 +120,16 @@ export function AgentMetricsPage(): JSX.Element {
   const [scenario, setScenario] = useState<string>('')
   const [scenarioOptions, setScenarioOptions] = useState<MetricScenario[]>([])
   const [scenarioError, setScenarioError] = useState<string | null>(null)
+  /**
+   * 租户 / Agent 可选筛选（批次 2 · 平台视角下钻）。
+   * '' = 平台视角跨租户聚合（后端 required=false，缺省即跨租户）。
+   * ⚠️ 端点支持差异必须如实呈现：overview / terminations / latency 支持租户+Agent；
+   *    tools 仅支持租户；anomalies 两者都不支持 —— 见统计范围标注。
+   */
+  const [tenantFilter, setTenantFilter] = useState<string>('')
+  const [agentFilter, setAgentFilter] = useState<string>('')
+  const [tenantOptions, setTenantOptions] = useState<PlatformTenant[]>([])
+  const [agentOptions, setAgentOptions] = useState<{ agentId: string; name: string | null; tenants: string[] }[]>([])
   /** 快速切换筛选时，旧请求后返回不得覆盖新口径的读数。 */
   const loadSeq = useRef(0)
   const [loading, setLoading] = useState(true)
@@ -179,7 +191,7 @@ export function AgentMetricsPage(): JSX.Element {
   useEffect(() => {
     let cancelled = false
     setScenarioError(null)
-    fetchMetricScenarios(hours)
+    fetchMetricScenarios(hours, tenantFilter === '' ? undefined : { tenantId: tenantFilter })
       .then((rows) => {
         if (!cancelled) setScenarioOptions(rows)
       })
@@ -190,22 +202,78 @@ export function AgentMetricsPage(): JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [hours])
+  }, [hours, tenantFilter])
+
+  // ── 租户 / Agent 筛选器数据源（平台链只读端点；失败只降级下拉为空，不挡指标）──
+  useEffect(() => {
+    let active = true
+    getPlatformTenants({ limit: 200 })
+      .then((list) => { if (active) setTenantOptions(list) })
+      .catch(() => { /* 筛选下拉留空，指标仍可用 */ })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    getConsoleAgentRegistry()
+      .then((rows) => {
+        if (!active) return
+        // 注册表返回「tenantId::agentId」绑定行：按 agentId 去重聚合出绑定租户清单
+        const map = new Map<string, { name: string | null; tenants: string[] }>()
+        for (const r of rows) {
+          const hit = map.get(r.agentId)
+          if (hit) {
+            if (!hit.tenants.includes(r.tenantId)) hit.tenants.push(r.tenantId)
+            if (!hit.name && r.name) hit.name = r.name
+          } else {
+            map.set(r.agentId, { name: r.name ?? null, tenants: [r.tenantId] })
+          }
+        }
+        setAgentOptions([...map].map(([agentId, v]) => ({ agentId, ...v })))
+      })
+      .catch(() => { /* 筛选下拉留空，指标仍可用 */ })
+    return () => { active = false }
+  }, [])
+
+  /** Agent 选项按租户收窄：选了租户后只列绑定到该租户的 Agent。 */
+  const agentSelectOptions = useMemo(
+    () => agentOptions.filter((a) => tenantFilter === '' || a.tenants.includes(tenantFilter)),
+    [agentOptions, tenantFilter],
+  )
+
+  /** 换租户后原 Agent 不在收窄清单里时清掉，避免「租户 A × 租户 B 的 Agent」恒空的静默错配。 */
+  useEffect(() => {
+    if (agentFilter !== '' && !agentSelectOptions.some((a) => a.agentId === agentFilter)) {
+      setAgentFilter('')
+    }
+  }, [agentFilter, agentSelectOptions])
+
+  const tenantLabelOf = useCallback(
+    (id: string) => tenantOptions.find((t) => t.tenantId === id)?.name ?? id,
+    [tenantOptions],
+  )
+  const agentLabelOf = useCallback(
+    (id: string) => agentOptions.find((a) => a.agentId === id)?.name ?? id,
+    [agentOptions],
+  )
 
   const load = useCallback(async (): Promise<void> => {
     const seq = ++loadSeq.current
     setLoading(true)
     setError(null)
-    // ⚠️ 五个读端点共用同一个 filter 对象 —— 少给一个端点带 scenario，
-    //    就会出现「总览已按场景收窄、分布/耗时/工具/异常仍是全量」的静默错配。
-    const filter = { scenario: scenario === '' ? undefined : scenario }
+    // ⚠️ 五个读端点的筛选能力不同，必须按端点支持范围传参，缺口在页面上显式标注：
+    //    overview / terminations / latency 支持租户+Agent；tools 仅租户；anomalies 仅场景。
+    //    把不支持的参数硬塞过去会被后端静默忽略 —— 又是「合计对不上却不报错」的失真形态。
+    const scenarioOnly = { scenario: scenario === '' ? undefined : scenario }
+    const withTenant = { ...scenarioOnly, tenantId: tenantFilter === '' ? undefined : tenantFilter }
+    const withTenantAndAgent = { ...withTenant, agentId: agentFilter === '' ? undefined : agentFilter }
     try {
       const [ov, tm, lt, tl, an] = await Promise.all([
-        fetchAgentMetricOverview(hours, filter),
-        fetchTerminationDistribution(hours, filter),
-        fetchLatency(hours, filter),
-        fetchToolBreakdown(hours, filter),
-        fetchAnomalies(hours, 20, filter),
+        fetchAgentMetricOverview(hours, withTenantAndAgent),
+        fetchTerminationDistribution(hours, withTenantAndAgent),
+        fetchLatency(hours, withTenantAndAgent),
+        fetchToolBreakdown(hours, withTenant),
+        fetchAnomalies(hours, 20, scenarioOnly),
       ])
       if (seq !== loadSeq.current) return
       setOverview(ov)
@@ -219,7 +287,7 @@ export function AgentMetricsPage(): JSX.Element {
     } finally {
       if (seq === loadSeq.current) setLoading(false)
     }
-  }, [hours, scenario])
+  }, [hours, scenario, tenantFilter, agentFilter])
 
   useEffect(() => {
     void load()
@@ -311,7 +379,29 @@ export function AgentMetricsPage(): JSX.Element {
         size="small"
         title="Agent 效果指标"
         extra={
-          <Space>
+          <Space wrap>
+            <Select
+              size="small"
+              allowClear
+              aria-label="按租户筛选"
+              placeholder="全部租户"
+              style={{ minWidth: 150 }}
+              value={tenantFilter === '' ? undefined : tenantFilter}
+              onChange={(v) => setTenantFilter(v ?? '')}
+              options={tenantOptions.map((t) => ({ value: t.tenantId, label: t.name }))}
+            />
+            <Select
+              size="small"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              aria-label="按Agent筛选"
+              placeholder="全部 Agent"
+              style={{ minWidth: 170 }}
+              value={agentFilter === '' ? undefined : agentFilter}
+              onChange={(v) => setAgentFilter(v ?? '')}
+              options={agentSelectOptions.map((a) => ({ value: a.agentId, label: a.name ?? a.agentId }))}
+            />
             <Select
               size="small"
               allowClear
@@ -334,6 +424,9 @@ export function AgentMetricsPage(): JSX.Element {
                 { label: '近 30 天', value: '720' },
               ]}
             />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {tenantFilter === '' ? '平台视角（跨租户聚合）' : '平台视角 · 已收窄到指定租户'}
+            </Typography.Text>
             <Button size="small" onClick={() => void load()}>
               刷新
             </Button>
@@ -381,6 +474,22 @@ export function AgentMetricsPage(): JSX.Element {
               scenarioMissingInRange
                 ? '该场景在当前时间窗内没有 Trace，页面上的 0 条是「区间内无数据」，不是「这个场景表现很差」。本页所有面板（含终止原因分布、耗时分位、工具维度、异常明细）均按同一场景口径过滤；清空筛选回到全量。'
                 : '本页所有面板（含终止原因分布、耗时分位、工具维度、异常明细）均按同一场景口径过滤；清空筛选回到全量。'
+            }
+          />
+        )}
+        {(tenantFilter !== '' || agentFilter !== '') && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 8 }}
+            message={
+              `当前统计范围：租户 = ${tenantFilter === '' ? '全部（跨租户）' : tenantLabelOf(tenantFilter)}`
+              + ` · Agent = ${agentFilter === '' ? '全部' : agentLabelOf(agentFilter)}`
+            }
+            description={
+              '总览、终止原因分布、耗时分位按「租户 + Agent」过滤；'
+              + '工具维度仅支持按租户过滤；异常明细暂不支持租户/Agent 筛选（保持跨租户全量）。'
+              + '清空筛选回到平台全量视角。'
             }
           />
         )}

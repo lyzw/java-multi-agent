@@ -70,6 +70,19 @@ public class AgentChatConfiguration {
     private static final Logger log = LoggerFactory.getLogger(AgentChatConfiguration.class);
 
     /**
+     * 统一裁决闸门（双入口方案第 1–3 刀）。
+     *
+     * <p>⚠️ 全进程<b>单例</b>：代理票签发（{@code DelegationTicketService}）与
+     * 编排侧能力裁决共用同一个冻结注册表（{@link Capability#defaults()}），
+     * 避免「签发按一套能力清单、裁决按另一套」的漂移。
+     */
+    @Bean
+    public cn.studykid.multiagent.ports.invocation.PolicyGate policyGate() {
+        return new cn.studykid.multiagent.ports.invocation.PolicyGate(
+                cn.studykid.multiagent.ports.invocation.Capability.defaults());
+    }
+
+    /**
      * 对话审计应急熔断（启动期，最高优先级）。
      *
      * <p>⚠️ 为 {@code true} 时<b>不包装</b>编排器，返回原实例（零开销、零风险）。

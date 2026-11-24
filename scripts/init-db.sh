@@ -161,7 +161,7 @@ if [ "$TARGET" = platform ]; then
   RLS_RETIRED_TABLES=0
   RLS_RETIRED_POLICIES=0
   EXPECT_RLS_TABLES=$((44 - RLS_RETIRED_TABLES))
-  EXPECT_POLICIES=$((57 - RLS_RETIRED_POLICIES))
+  EXPECT_POLICIES=$((61 - RLS_RETIRED_POLICIES))
   echo "· 自检"
   TABLES=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_tables WHERE schemaname IN ('public','platform')")
   RLSTB=$(psql_owner -d "$DB" -tAc "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relrowsecurity")

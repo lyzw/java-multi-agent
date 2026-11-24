@@ -190,6 +190,17 @@ describe('平台控制台 · Agent 注册表（中文优先 · 跨租户 · 运�
     })
   })
 
+  it('✅ 跨租户全量盘点口径显式标注：租户/Agent 计数 + 本地过滤不重新请求（改造点 2-1-1）', async () => {
+    stubDefaults()
+    renderRegistry()
+    await waitFor(() => expect(screen.getAllByText('订单助手').length).toBeGreaterThan(0))
+    // 顶部 Alert 必须写明「跨租户全量盘点」口径与覆盖数量，防止误读为本租户视图
+    expect(screen.getAllByText(/跨租户全量盘点/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/个已绑定租户/).length).toBeGreaterThan(0)
+    // 筛选语义：本地过滤同一份数据，不重新请求平台链
+    expect(screen.getAllByText(/不重新请求平台链/).length).toBeGreaterThan(0)
+  })
+
   it('✅ 已修改未发布：列表标红字标签，统计卡计数包含该 Agent', async () => {
     stubDefaults()
     renderRegistry()

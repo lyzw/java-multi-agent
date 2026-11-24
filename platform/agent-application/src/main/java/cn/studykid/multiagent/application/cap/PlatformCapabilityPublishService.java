@@ -81,9 +81,16 @@ public class PlatformCapabilityPublishService {
 
     private static final Logger log = LoggerFactory.getLogger(PlatformCapabilityPublishService.class);
 
-    /** 本服务可做生命周期迁移的平台级对象类型。 */
+    /**
+     * 本服务可做生命周期迁移的平台级对象类型。
+     *
+     * <p>⚠️ {@code agent} 是<b>全局实体</b>（cap_agent_def 无 tenant_id，租户可用性由
+     * tenant_agent_binding 决定），停用（DEPRECATED）一律走平台通道：
+     * {@code ConfigLifecycleMapper} 的 agent 分支本就按 {@code (agent_id, version)}
+     * 全局寻址、无 tenant_id 谓词 —— 传 {@code tenantId = null} 即可。
+     */
     public static final Set<String> PLATFORM_LIFECYCLE_OBJECT_TYPES =
-            Set.of("tool", "skill", "mcp_server");
+            Set.of("tool", "skill", "mcp_server", "agent");
 
     /** 变更前快照的序列化器（Jackson 3，与 ConfigPublishPayload 同源）。 */
     private static final tools.jackson.databind.ObjectMapper SNAPSHOT_MAPPER =
@@ -245,7 +252,8 @@ public class PlatformCapabilityPublishService {
     /**
      * 提交平台级生命周期迁移申请（停用 / 回退）。
      *
-     * @param spec        迁移参数（对象类型必须是 tool / skill / mcp_server）
+     * @param spec        迁移参数（对象类型见 {@link #PLATFORM_LIFECYCLE_OBJECT_TYPES}；
+     *                    {@code agent} 为全局实体，按 (agent_id, version) 全局寻址）
      * @param reason      变更理由
      * @param requesterId 申请人主体标识
      * @return 申请单（PENDING）
@@ -386,8 +394,75 @@ public class PlatformCapabilityPublishService {
         //    事后反查权威表会因目标版本被清理 / 再次变更而失真，
         //    而客户端提交的「变更前」没有证据价值（调用方自己写的）。
         String beforePayload = snapshotBefore(payload);
+        // ⚠️ 变更**立即**产生版本行（草稿态，published_at = NULL）：
+        //    不等发布才建版本，否则「改了什么」发布前无处可查。
+        //    版本号在这一刻定死，发布只做「转正」。
+        materializeDraftVersions(payload);
         return session.inPlatformScopeSession(() -> requests.insertWithBeforeSnapshot(
                 null, payload.operation(), payload.toJson(), beforePayload, reason, requesterId));
+    }
+
+    /**
+     * 为本次变更<b>立即落草稿版本行</b>（{@code published_at = NULL}，平台口径）。
+     *
+     * <p>⚠️ <b>为什么在申请时就建版本</b>：让「改了什么」在发布前就可查
+     * （变更记录 / 版本对比都依赖版本行），且版本号在提交那一刻定死 ——
+     * 后续审批、发布都不会再变号，发布只做「转正」。
+     *
+     * <p>⚠️ <b>复用已有未发布草稿</b>：最高版本若仍是未发布草稿，
+     * 就<b>就地更新它</b>而不是新增版本号 —— 否则反复提交会堆出一串内容相近的空版本。
+     * 只有当前最高版本已发布（或不存在）时，才新建 {@code 最高版本 + 1} 的草稿。
+     *
+     * <p>⚠️ <b>失败不阻断申请</b>：写草稿是「尽早留痕」的优化；
+     * 真出错时仍让申请单落地（发布路径会回落到 insert 补建），但记 warn 留痕。
+     */
+    private void materializeDraftVersions(@NonNull ConfigPublishPayload payload) {
+        Instant now = clock.instant();
+        try {
+            for (ConfigPublishPayload.AgentSpec spec : payload.agents()) {
+                if (agentDefs == null) {
+                    continue;
+                }
+                CapAgentDef latest = agentDefs.findLatestGlobal(spec.agentId()).orElse(null);
+                if (latest != null && latest.publishedAt() == null) {
+                    // 复用未发布草稿：版本号不变，就地更新内容
+                    agentDefs.updateDraftGlobal(agentDraft(spec, latest.version(), now));
+                    continue;
+                }
+                int version = (latest == null ? 0 : latest.version()) + 1;
+                agentDefs.insert(agentDraft(spec, version, now));
+            }
+            for (ConfigPublishPayload.ToolSpec spec : payload.tools()) {
+                CapToolDef latest = toolDefs.findLatest(spec.toolId()).orElse(null);
+                if (latest != null && latest.publishedAt() == null) {
+                    toolDefs.updateDraft(toolDraft(spec, latest.version(), now));
+                    continue;
+                }
+                int version = (latest == null ? 0 : latest.version()) + 1;
+                toolDefs.insert(toolDraft(spec, version, now));
+            }
+            for (ConfigPublishPayload.SkillSpec spec : payload.skills()) {
+                CapSkillDef latest = skillDefs.findLatest(spec.skillId()).orElse(null);
+                if (latest != null && latest.publishedAt() == null) {
+                    skillDefs.updateDraft(skillDraft(spec, latest.version(), now));
+                    continue;
+                }
+                int version = (latest == null ? 0 : latest.version()) + 1;
+                skillDefs.insert(skillDraft(spec, version, now));
+            }
+            for (ConfigPublishPayload.McpServerSpec spec : payload.mcpServers()) {
+                CapMcpServerDef latest = serverDefs.findLatest(spec.serverId()).orElse(null);
+                if (latest != null && latest.publishedAt() == null) {
+                    serverDefs.updateDraft(serverDraft(spec, latest.version(), now));
+                    continue;
+                }
+                int version = (latest == null ? 0 : latest.version()) + 1;
+                serverDefs.insert(serverDraft(spec, version, now));
+            }
+        } catch (RuntimeException e) {
+            log.warn("提交阶段落草稿版本行失败（不阻断申请，发布时会补建）：operation={}",
+                    payload.operation(), e);
+        }
     }
 
     /**

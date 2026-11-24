@@ -787,7 +787,7 @@ export function AgentRegistryPage(): JSX.Element {
         showIcon
         style={{ marginBottom: 16 }}
         message="Agent 是全局智能体实体；运营统一维护定义与租户绑定关系"
-        description="本页以 Agent 身份为主视角聚合：每行 = 一个 Agent 的完整画像（绑定多少租户、用哪个模型、编排模式、能力清单）。列表只显示中文名称，UUID 仅在详情里作辅助标识。新增 / 修改走同一张草稿表单（流程按发布策略分流）；申请已提交但尚未执行的 Agent 会标记「已修改未发布」；「删除」= 停用（DEPRECATED 单向终态）。"
+        description={`本页为跨租户全量盘点（${tenants.length > 0 ? `覆盖 ${tenantIds.length} 个已绑定租户 / ` : ''}${agentUniq.length} 个 Agent）；租户/编排筛选与搜索只是对同一份数据做本地过滤，不重新请求平台链。本页以 Agent 身份为主视角聚合：每行 = 一个 Agent 的完整画像（绑定多少租户、用哪个模型、编排模式、能力清单）。列表只显示中文名称，UUID 仅在详情里作辅助标识。新增 / 修改走同一张草稿表单（流程按发布策略分流）；申请已提交但尚未执行的 Agent 会标记「已修改未发布」；「删除」= 停用（DEPRECATED 单向终态）。`}
       />
       {error && (
         <Alert type="error" showIcon style={{ marginBottom: 16 }} message="Agent 注册表不可用" description={error} />
