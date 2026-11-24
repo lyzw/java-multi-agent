@@ -387,6 +387,34 @@ COMMENT ON COLUMN rag.rag_chunk.scope IS '''作用域：PLATFORM=平台全局（
 
 
 --
+-- Name: COLUMN rag_chunk.parent_chunk_id; Type: COMMENT; Schema: rag; Owner: -
+--
+
+COMMENT ON COLUMN rag.rag_chunk.parent_chunk_id IS '父块 ID（RAG-D28 P2-1）。NULL=顶层块；非空=本块是子块，检索命中时回带父块送 LLM。';
+
+
+--
+-- Name: COLUMN rag_chunk.chunk_level; Type: COMMENT; Schema: rag; Owner: -
+--
+
+COMMENT ON COLUMN rag.rag_chunk.chunk_level IS '层级：0=父块（上下文聚合）/顶层自然块，1=子块（精确召回、算 embedding）。';
+
+
+--
+-- Name: COLUMN rag_chunk.formula_natural_language; Type: COMMENT; Schema: rag; Owner: -
+--
+
+COMMENT ON COLUMN rag.rag_chunk.formula_natural_language IS '公式 embedding 语义（RAG-D28 P3-1）。命中受控词典=LaTeX+自然语言+符号；未命中=仅LaTeX；NULL=非公式块或未采集。';
+
+
+--
+-- Name: COLUMN rag_chunk.caption_or_table_summary; Type: COMMENT; Schema: rag; Owner: -
+--
+
+COMMENT ON COLUMN rag.rag_chunk.caption_or_table_summary IS '图注/表格摘要 embedding 文本（RAG-D28 P3-1）。表格=确定性结构摘要（行列数+表头）；图片无VLM caption时NULL。';
+
+
+--
 -- Name: rag_chunk_embedding; Type: TABLE; Schema: rag; Owner: -
 --
 
@@ -396,6 +424,7 @@ CREATE TABLE rag.rag_chunk_embedding (
     index_generation integer DEFAULT 1 NOT NULL,
     embed_model text NOT NULL,
     embedding public.halfvec(4096) NOT NULL,
+    embedding_v2 public.halfvec(1024),
     scope text DEFAULT 'TENANT'::text NOT NULL,
     CONSTRAINT rag_chunk_embedding_scope_ck CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
 );
@@ -415,6 +444,13 @@ COMMENT ON TABLE rag.rag_chunk_embedding IS '片段向量。索引代际（index
 --
 
 COMMENT ON COLUMN rag.rag_chunk_embedding.scope IS '''作用域：PLATFORM=平台全局（tenant_id 恒为 rag_global_tenant_id() 哨兵，全租户只读可见）；TENANT=租户私有（严格隔离）。''';
+
+
+--
+-- Name: COLUMN rag_chunk_embedding.embedding_v2; Type: COMMENT; Schema: rag; Owner: -
+--
+
+COMMENT ON COLUMN rag.rag_chunk_embedding.embedding_v2 IS 'MRL 截断到 1024 维的向量（D29 DEC-P2）。与 embedding halfvec(4096) 并存；NULL=4096 代际行。读路径按 rag_index_generation.dimension 选列。';
 
 
 --
