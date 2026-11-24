@@ -58,6 +58,18 @@ public class LocalRagPortsConfig {
 
     private final boolean localPortsEnabled;
 
+    // ===== 批 9 完整链装配参数（字段注入；仅 Spring 装配实例使用，测试直接 new 走 5 参重载不触达） =====
+    @Value("${rag.premise.parse-backend:docling}")
+    private String premiseBackendValue = "docling";
+    @Value("${rag.premise.mineru.base-url:}")
+    private String mineruBaseUrlValue = "";
+    @Value("${rag.premise.mineru.tier:standard}")
+    private String mineruTierValue = "standard";
+    @Value("${rag.premise.mineru.timeout-seconds:600}")
+    private int mineruTimeoutValue = 600;
+    @Value("${rag.premise.page-routing.enabled:false}")
+    private boolean pageRoutingEnabledValue = false;
+
     /**
      * 解析端口装配（V1.0.2 S2-1）。
      *
@@ -141,12 +153,34 @@ public class LocalRagPortsConfig {
      * <p>⚠️ 配置错误（未知策略值）在<b>装配期</b>即抛异常（应用拒绝启动）——
      * 比运行期失败更早暴露，符合 fail-closed 纪律。
      *
-     * @param parserPort   解析端口（两种模式共用，保证评测只变量是切分）
-     * @param premiseEnabled 灰度开关（默认 false）
-     * @param chunkPolicyValue 策略配置值（heading / hybrid，大小写不敏感）
-     * @param maxTokens    token 预算
-     * @param overlapRatio 重叠比例
-     * @return 管道实例
+     * <p>⚠️ 五参兼容重载（既有测试直接调用）：等价于 fullChain=false。
+     * Spring 装配走下方的七参 {@link Bean} 方法（批 9 完整链接线）。
+     */
+    public IngestionPipeline ingestionPipeline(
+            DocumentParserPort parserPort,
+            boolean premiseEnabled,
+            String chunkPolicyValue,
+            int maxTokens,
+            double overlapRatio) {
+        return ingestionPipeline(parserPort, premiseEnabled, chunkPolicyValue,
+                maxTokens, overlapRatio, false, false, false);
+    }
+
+    /**
+     * 入库切分管道（批 9：完整 premise 链接线）。
+     *
+     * <p><b>模式优先级（fail-closed，不静默降级）</b>：
+     * <ol>
+     *   <li>{@code rag.premise.ingest-chain.enabled=true} → 完整链：
+     *       {@code PremisePreprocessor}（页级路由 + 多后端）→ 归一化 → 切分 → 后处理。
+     *       这是批 1~8 P1/P2 能力进入生产摄取链的唯一入口；
+     *       要求 {@code premiseEnabled=true}（否则装配期拒绝——避免两套链并存却只跑一套）。</li>
+     *   <li>{@code premiseEnabled=true}（fullChain=false）→ 阶段 3.1 premise 切分器（旧灰度）。</li>
+     *   <li>否则 → 旧内置切分。</li>
+     * </ol>
+     *
+     * <p>⚠️ 灰度纪律：三项开关（完整链 / 跨页表合并 / 父子装配）默认全关，
+     * 逐项可独立开启；能力"已实现"不等于"生产生效"，开启前评测不可宣称 P1/P2 达标。
      */
     @Bean
     public IngestionPipeline ingestionPipeline(
@@ -154,15 +188,29 @@ public class LocalRagPortsConfig {
             @Value("${rag.premise.enabled:false}") boolean premiseEnabled,
             @Value("${rag.premise.chunk-policy:}") String chunkPolicyValue,
             @Value("${rag.premise.max-tokens:512}") int maxTokens,
-            @Value("${rag.premise.overlap-ratio:0.15}") double overlapRatio) {
+            @Value("${rag.premise.overlap-ratio:0.15}") double overlapRatio,
+            @Value("${rag.premise.ingest-chain.enabled:false}") boolean fullChainEnabled,
+            @Value("${rag.premise.ingest-chain.merge-tables:false}") boolean mergeTables,
+            @Value("${rag.premise.ingest-chain.parent-child:false}") boolean parentChild) {
+        cn.studykid.rag.premise.model.ChunkPolicy policy =
+                cn.studykid.rag.premise.model.ChunkPolicy.fromConfigValue(chunkPolicyValue);
+        if (fullChainEnabled) {
+            if (!premiseEnabled) {
+                throw new IllegalStateException(
+                        "rag.premise.ingest-chain.enabled=true 但 rag.premise.enabled=false："
+                                + "完整链依赖 premise 门面装配——拒绝装配（不静默降级）");
+            }
+            var facade = buildProductionFacade(parserPort);
+            log.info("[RAG] IngestionPipeline → 完整 premise 链（policy={}，mergeTables={}，"
+                            + "parentChild={}，backend={}；批 9 摄取链接线已启用）",
+                    policy, mergeTables, parentChild, facade.parseBackendId());
+            return new IngestionPipeline(facade, policy, mergeTables, parentChild);
+        }
         if (!premiseEnabled) {
             log.info("[RAG] IngestionPipeline → 旧内置切分（rag.premise.enabled=false，"
                     + "RAG-D26 阶段 3 灰度未开启）");
             return new IngestionPipeline(parserPort);
         }
-        // ⚠️ 装配期解析策略：未知值在这里就抛（应用拒绝启动），不留到运行期。
-        cn.studykid.rag.premise.model.ChunkPolicy policy =
-                cn.studykid.rag.premise.model.ChunkPolicy.fromConfigValue(chunkPolicyValue);
         var config = new cn.studykid.rag.premise.model.ChunkPolicyConfig(
                 maxTokens, overlapRatio, true, true);
         cn.studykid.rag.premise.spi.BlockChunker chunker = premiseChunker(policy);
@@ -170,6 +218,63 @@ public class LocalRagPortsConfig {
                         + "overlapRatio={}；⚠️ 灰度开启后切分留痕为 {}）",
                 policy, maxTokens, overlapRatio, policy);
         return new IngestionPipeline(parserPort, chunker, config);
+    }
+
+    /**
+     * 构造生产完整链门面：解析后端（docling/mineru/页级路由）+ 双切分器（heading 注入附录 resolver）。
+     *
+     * <p>⚠️ 与 {@link #premisePreprocessor} 的装配语义同源（同一份配置键），
+     * 但本方法专供完整链：heading 切分器<b>注入</b> {@link AppendixLogicalUnitResolver}
+     * （P2-4 附录逻辑单位），使批 8 的附录规则真实生效。不复用 bean 是为避免
+     * 改动既有 5/6 参方法的签名（测试直接调用）。
+     */
+    private cn.studykid.rag.premise.PremisePreprocessor buildProductionFacade(
+            DocumentParserPort parserPort) {
+        // 解析后端选择与 pageRouting（与 premisePreprocessor bean 同口径）
+        String backendValue = premiseBackendValue;
+        cn.studykid.rag.premise.spi.DocumentParseBackend parseBackend =
+                switch (backendValue == null ? "" : backendValue.trim().toLowerCase()) {
+                    case "", "docling" ->
+                            new cn.studykid.rag.infrastructure.premise.DoclingPremiseBackend(parserPort);
+                    case "mineru" -> {
+                        requireMineruEndpoint();
+                        yield new cn.studykid.rag.infrastructure.premise.MineruPremiseBackend(
+                                mineruBaseUrlValue, mineruTierValue, mineruTimeoutValue);
+                    }
+                    default -> throw new IllegalStateException(
+                            "未知解析后端: " + backendValue + "（合法值: docling / mineru）");
+                };
+        if (pageRoutingEnabledValue) {
+            if ("mineru".equals(backendValue == null ? "" : backendValue.trim().toLowerCase())) {
+                throw new IllegalStateException(
+                        "页级路由 + mineru 主后端：已是最贵档位，拒绝装配");
+            }
+            requireMineruEndpoint();
+            var escalation = new cn.studykid.rag.infrastructure.premise.MineruPremiseBackend(
+                    mineruBaseUrlValue, mineruTierValue, mineruTimeoutValue);
+            var router = new cn.studykid.rag.premise.routing.PageRouter(
+                    cn.studykid.rag.premise.routing.RoutingConfig.productionDefault());
+            parseBackend = new cn.studykid.rag.premise.routing.RoutingParseBackend(
+                    parseBackend, escalation, router);
+        }
+        // heading 切分器注入附录逻辑单位 resolver（P2-4 生产生效点）
+        var headingChunker = new cn.studykid.rag.premise.chunker.HeadingHierarchyChunker(
+                new cn.studykid.rag.premise.normalize.AppendixLogicalUnitResolver());
+        var hybridChunker = new cn.studykid.rag.premise.chunker.HybridChunkerClient();
+        return new cn.studykid.rag.premise.PremisePreprocessor(
+                parseBackend,
+                java.util.Map.of(
+                        cn.studykid.rag.premise.model.ChunkPolicy.HEADING_HIERARCHY, headingChunker,
+                        cn.studykid.rag.premise.model.ChunkPolicy.HYBRID_CHUNKER, hybridChunker),
+                cn.studykid.rag.premise.model.ChunkPolicyConfig.productionDefault());
+    }
+
+    private void requireMineruEndpoint() {
+        if (mineruBaseUrlValue == null || mineruBaseUrlValue.isBlank()) {
+            throw new IllegalStateException(
+                    "完整链需要 MinerU（页级路由升级或主后端）但 rag.premise.mineru.base-url 未配置"
+                            + "——拒绝装配");
+        }
     }
 
     /**

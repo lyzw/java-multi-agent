@@ -117,13 +117,13 @@ public class JdbcCorpusRepository implements CorpusRepository {
                     (chunk_id, tenant_id, document_id, edition_id, role, text, text_jieba,
                      page_number, section_path, exercise_no, char_start, char_end, kp_ids,
                      exercise_ref, content_hash, embed_model, index_generation,
-                     in_answer_zone, block_type, matched_prefix)
+                     in_answer_zone, block_type, matched_prefix, parent_chunk_id, chunk_level)
                 VALUES (?::uuid, {rag_tenant}, ?::uuid, ?::uuid, ?::rag_chunk_role, ?,
                         '', ?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?,
                         COALESCE((SELECT g.generation FROM rag_index_generation g
                                    WHERE g.tenant_id = {rag_tenant}
                                      AND g.status = 'ACTIVE' LIMIT 1), 1),
-                        ?, ?, ?)
+                        ?, ?, ?, ?, ?)
                 ON CONFLICT (chunk_id) DO UPDATE SET
                     role = EXCLUDED.role,
                     text = EXCLUDED.text,
@@ -140,7 +140,9 @@ public class JdbcCorpusRepository implements CorpusRepository {
                     index_generation = EXCLUDED.index_generation,
                     in_answer_zone = EXCLUDED.in_answer_zone,
                     block_type = EXCLUDED.block_type,
-                    matched_prefix = EXCLUDED.matched_prefix
+                    matched_prefix = EXCLUDED.matched_prefix,
+                    parent_chunk_id = EXCLUDED.parent_chunk_id,
+                    chunk_level = EXCLUDED.chunk_level
                 """.replace("{rag_tenant}", tenantLiteral),
                 chunk.id(), chunk.documentId(), editionId, chunk.role().name(), chunk.text(),
                 chunk.locator().pageNumber(), chunk.locator().sectionPath(),
@@ -150,7 +152,9 @@ public class JdbcCorpusRepository implements CorpusRepository {
                 // 版面事实（可空：旧路径 / 非解析来源产生的片段没有这些信息）
                 chunk.layoutFacts() != null && chunk.layoutFacts().inAnswerZone(),
                 chunk.layoutFacts() == null ? null : chunk.layoutFacts().blockType(),
-                chunk.layoutFacts() == null ? null : chunk.layoutFacts().matchedPrefix());
+                chunk.layoutFacts() == null ? null : chunk.layoutFacts().matchedPrefix(),
+                // 父子块（批 9 / P2-1）：parentId 可空 → 逐参数绑定 + setNull 处理（铁律 #29）
+                chunk.parentId(), chunk.chunkLevel());
         jdbcTemplate.update("""
                 INSERT INTO rag_chunk_embedding
                     (chunk_id, tenant_id, index_generation, embed_model, embedding)
@@ -375,13 +379,14 @@ public class JdbcCorpusRepository implements CorpusRepository {
                         (chunk_id, tenant_id, document_id, edition_id, role, text, text_jieba,
                          page_number, section_path, exercise_no, char_start, char_end, kp_ids,
                          exercise_ref, content_hash, embed_model, index_generation,
-                         in_answer_zone, block_type, matched_prefix, scope)
+                         in_answer_zone, block_type, matched_prefix, parent_chunk_id, chunk_level,
+                         scope)
                     VALUES (?::uuid, {rag_sentinel}, ?::uuid, ?::uuid, ?::rag_chunk_role, ?,
                             '', ?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?,
                             COALESCE((SELECT g.generation FROM rag_index_generation g
                                        WHERE g.tenant_id = {rag_sentinel}
                                          AND g.status = 'ACTIVE' LIMIT 1), 1),
-                            ?, ?, ?,
+                            ?, ?, ?, ?, ?,
                             'PLATFORM')
                     ON CONFLICT (chunk_id) DO UPDATE SET
                         role = EXCLUDED.role,
@@ -399,7 +404,9 @@ public class JdbcCorpusRepository implements CorpusRepository {
                         index_generation = EXCLUDED.index_generation,
                         in_answer_zone = EXCLUDED.in_answer_zone,
                         block_type = EXCLUDED.block_type,
-                        matched_prefix = EXCLUDED.matched_prefix
+                        matched_prefix = EXCLUDED.matched_prefix,
+                        parent_chunk_id = EXCLUDED.parent_chunk_id,
+                        chunk_level = EXCLUDED.chunk_level
                     """.replace("{rag_sentinel}", SENTINEL_TENANT_LITERAL),
                     chunk.id(), chunk.documentId(), editionId, chunk.role().name(), chunk.text(),
                     chunk.locator().pageNumber(), chunk.locator().sectionPath(),
@@ -409,7 +416,9 @@ public class JdbcCorpusRepository implements CorpusRepository {
                     // 版面事实（可空：旧路径 / 非解析来源产生的片段没有这些信息）
                     chunk.layoutFacts() != null && chunk.layoutFacts().inAnswerZone(),
                     chunk.layoutFacts() == null ? null : chunk.layoutFacts().blockType(),
-                    chunk.layoutFacts() == null ? null : chunk.layoutFacts().matchedPrefix());
+                    chunk.layoutFacts() == null ? null : chunk.layoutFacts().matchedPrefix(),
+                    // 父子块（批 9 / P2-1）
+                    chunk.parentId(), chunk.chunkLevel());
             // ⚠️ 向量写入同样带 WHERE 租户判据（承重，非冗余）：chunk_id 是全表主键，
             //    冲突可能来自任意租户的行；不加 WHERE，冲突分支就成了一条
             //    「经 chunk_id 写进别人桶」的旁路。

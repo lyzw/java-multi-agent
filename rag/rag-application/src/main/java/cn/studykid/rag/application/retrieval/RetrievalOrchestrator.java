@@ -48,12 +48,26 @@ public class RetrievalOrchestrator {
 
     private final RetrievalPort retrievalPort;
     private final double minScore;
+    /** 批 9 / P2-1：是否回带父块（默认 false 保既有行为，装配方灰度开启）。 */
+    private final boolean expandParents;
 
     /**
      * @param retrievalPort 检索端口
      * @param minScore 分数门禁阈值（低于此值视为未找到依据）
      */
     public RetrievalOrchestrator(RetrievalPort retrievalPort, double minScore) {
+        this(retrievalPort, minScore, false);
+    }
+
+    /**
+     * 批 9 完整链构造：可开启父块回带。
+     *
+     * @param retrievalPort 检索端口
+     * @param minScore      分数门禁阈值
+     * @param expandParents 是否回带父块（需配合摄取链 parent-child 开关）
+     */
+    public RetrievalOrchestrator(RetrievalPort retrievalPort, double minScore,
+                                 boolean expandParents) {
         if (retrievalPort == null) {
             throw new IllegalArgumentException("retrievalPort 不能为空");
         }
@@ -62,6 +76,7 @@ public class RetrievalOrchestrator {
         }
         this.retrievalPort = retrievalPort;
         this.minScore = minScore;
+        this.expandParents = expandParents;
     }
 
     /**
@@ -153,13 +168,21 @@ public class RetrievalOrchestrator {
                 above.size(),           // ④ 分数门禁后
                 returned.size());       // ⑤ topK 截断后
 
+        // ⑨ 父块回带（批 9 / P2-1，可选）：命中子块后按 parent_chunk_id 取回父块送 LLM。
+        //    ⚠️ 位于 topK 之后：父块是「上下文」，不挤占 topK 名额、不参与排序、不进 funnel。
+        //    ⚠️ 回带父块再过一次角色闸门（RetrievalPolicy.expandParents 内部），
+        //       讲解模式绝不因回带而泄题；去重保序由 expandParents 保证。
+        List<ScoredChunk> delivered = expandParents
+                ? withParentContext(scope, returned, request.mode())
+                : returned;
+
         if (above.isEmpty()) {
             log.debug("检索未达分数门禁：query={} mode={} minScore={} funnel={}",
                     request.query(), request.mode(), minScore, funnel);
         }
 
         return new RetrievalResult(
-                returned,
+                delivered,
                 knowledgePoints,
                 request.editionScope().preferred(),
                 versionMismatch,
@@ -167,6 +190,50 @@ public class RetrievalOrchestrator {
                 funnel,
                 // 本次实际生效的门禁阈值（界面据此画刻度线，避免与配置漂移）
                 minScore);
+    }
+
+    /**
+     * 父块回带（批 9 / P2-1）：命中子块 → 按 parent_chunk_id 取回父块 → 过角色闸门 → 附加。
+     *
+     * <p>⚠️ cast 到 {@link ScoredChunk} 时，父块用<b>声明式基准分</b>
+     * （{@link #COMPLETION_BASE_SCORE}）与独立通道/原因（PARENT_CONTEXT / PARENT_EXPANSION），
+     * 绝不伪造「检索命中分」——父块不是被检索出来的，是沿结构回带的上下文。
+     *
+     * <p>⚠️ 父块来源经 {@code RetrievalPort.loadByIds}，与命中片段同一道作用域隔离
+     * （RLS + 显式 tenant 谓词），他租户父块取不到；取回后再由
+     * {@link RetrievalPolicy#expandParents} 按 mode 过滤角色、去重保序。
+     */
+    private List<ScoredChunk> withParentContext(RagScopeFilter scope,
+                                                List<ScoredChunk> hits,
+                                                RetrievalRequest.RetrievalMode mode) {
+        if (hits.isEmpty()) {
+            return hits;
+        }
+        List<String> parentIds = new ArrayList<>();
+        for (ScoredChunk hit : hits) {
+            String pid = hit.chunk().parentId();
+            if (pid != null && !parentIds.contains(pid)) {
+                parentIds.add(pid);
+            }
+        }
+        if (parentIds.isEmpty()) {
+            return hits;
+        }
+        List<Chunk> pool = new ArrayList<>(hits.stream().map(ScoredChunk::chunk).toList());
+        pool.addAll(retrievalPort.loadByIds(scope, parentIds));
+        List<Chunk> expanded = RetrievalPolicy.expandParents(
+                hits.stream().map(ScoredChunk::chunk).toList(), pool, mode);
+        // 仅新增的父块需要包装为 ScoredChunk（命中片段保持原分数/通道不变）。
+        java.util.Set<String> hitIds = hits.stream().map(s -> s.chunk().id())
+                .collect(java.util.stream.Collectors.toSet());
+        List<ScoredChunk> result = new ArrayList<>(hits);
+        for (Chunk c : expanded) {
+            if (!hitIds.contains(c.id())) {
+                result.add(new ScoredChunk(c, COMPLETION_BASE_SCORE, 0.0,
+                        RetrievalChannel.PARENT_CONTEXT, HitReason.PARENT_EXPANSION));
+            }
+        }
+        return List.copyOf(result);
     }
 
     /**

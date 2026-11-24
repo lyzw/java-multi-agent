@@ -73,6 +73,24 @@ public class IngestionPipeline {
     private final cn.studykid.rag.premise.model.ChunkPolicyConfig premiseConfig;
 
     /**
+     * 完整 premise 链门面（批 9 生产接线点，默认 null）。
+     *
+     * <p>⚠️ 非 null 时 {@link #ingest} 走「门面解析（含页级路由/多后端）→ 归一化
+     * → 切分 → 可选父子装配」的完整链，这是批 1~8 的 P1/P2 能力<b>唯一</b>进入
+     * 生产摄取链的入口。为 null 时保留既有两模式（双模式测试锚定）。
+     */
+    private final cn.studykid.rag.premise.PremisePreprocessor premiseFacade;
+
+    /** 完整链选用的切分策略（仅 facade 模式非 null）。 */
+    private final cn.studykid.rag.premise.model.ChunkPolicy premisePolicy;
+
+    /** 完整链是否执行跨页表合并（P1-5b）。 */
+    private final boolean mergeTables;
+
+    /** 完整链是否执行父子块装配（P2-1）。 */
+    private final boolean assembleParents;
+
+    /**
      * @param parserPort 解析端口（旧路径与新路径共用）
      */
     public IngestionPipeline(DocumentParserPort parserPort) {
@@ -99,13 +117,60 @@ public class IngestionPipeline {
         this.parserPort = parserPort;
         this.premiseChunker = premiseChunker;
         this.premiseConfig = premiseConfig;
+        this.premiseFacade = null;
+        this.premisePolicy = null;
+        this.mergeTables = false;
+        this.assembleParents = false;
+    }
+
+    /**
+     * 完整 premise 链构造（批 9 生产接线点）。
+     *
+     * <p>⚠️ facade 模式<b>不</b>使用 {@code parserPort}——解析由门面内的
+     * {@code DocumentParseBackend}（含页级路由/MinerU）承担；切分策略由
+     * {@code policy} 在门面内查表，避免「装配 facade 却用另一套 chunker」的留痕失真。
+     *
+     * @param facade           premise 门面（含解析后端与切分器表）
+     * @param policy           切分策略（门面必须已装配对应切分器，否则运行期 fail-closed）
+     * @param mergeTables      是否执行跨页表合并（P1-5b）
+     * @param assembleParents  是否执行父子块装配（P2-1）
+     */
+    public IngestionPipeline(cn.studykid.rag.premise.PremisePreprocessor facade,
+                             cn.studykid.rag.premise.model.ChunkPolicy policy,
+                             boolean mergeTables, boolean assembleParents) {
+        if (facade == null) {
+            throw new IllegalArgumentException("premise 门面不能为空");
+        }
+        if (policy == null) {
+            throw new IllegalArgumentException("切分策略不能为空");
+        }
+        // 装配期 fail-closed：门面未装配所选策略 → 拒绝构造（不留到运行期）。
+        if (!facade.availablePolicies().contains(policy)) {
+            throw new IllegalArgumentException(
+                    "premise 门面未装配切分策略 " + policy + "（已装配: "
+                            + facade.availablePolicies() + "）");
+        }
+        this.parserPort = null;
+        this.premiseChunker = null;
+        this.premiseConfig = null;
+        this.premiseFacade = facade;
+        this.premisePolicy = policy;
+        this.mergeTables = mergeTables;
+        this.assembleParents = assembleParents;
     }
 
     /**
      * @return 是否启用 premise 切分管线（装配自检与测试断言用）
      */
     public boolean premiseModeEnabled() {
-        return premiseChunker != null;
+        return premiseChunker != null || premiseFacade != null;
+    }
+
+    /**
+     * @return 是否走批 9 完整 premise 链（页级路由 + 归一化 + 后处理）
+     */
+    public boolean fullChainEnabled() {
+        return premiseFacade != null;
     }
 
     /**
@@ -113,6 +178,9 @@ public class IngestionPipeline {
      *         旧模式返回 null——「未采集」语义，不伪造策略值
      */
     public String chunkPolicyTrace() {
+        if (premiseFacade != null) {
+            return premisePolicy.name();
+        }
         return premiseChunker == null ? null : premiseChunker.policy().name();
     }
 
@@ -121,6 +189,9 @@ public class IngestionPipeline {
      *         旧模式返回 null
      */
     public String chunkPolicyConfigTrace() {
+        if (premiseFacade != null) {
+            return premiseFacade.config().stableString();
+        }
         return premiseConfig == null ? null : premiseConfig.stableString();
     }
 
@@ -139,6 +210,11 @@ public class IngestionPipeline {
                                        @NonNull EditionCoordinate edition,
                                        @NonNull byte[] content,
                                        @NonNull List<KnowledgePoint> knowledgePoints) {
+        // 批 9：完整 premise 链优先——由门面内的解析后端（含页级路由/MinerU）
+        // 解析，不走 parserPort。这是批 1~8 P1/P2 能力进入生产链的唯一入口。
+        if (premiseFacade != null) {
+            return ingestViaFullChain(documentId, edition, knowledgePoints, content);
+        }
         ParsedDocument parsed = parserPort.parse(documentId, content);
         // 阶段 3.1 双模式：注入了 premise 切分器 → 走归一化 + 切分 SPI；
         // 否则走内置主循环（与迁移前行为逐条等价，旧测试锚定）。
@@ -146,6 +222,47 @@ public class IngestionPipeline {
             return ingestViaPremise(documentId, edition, knowledgePoints, parsed);
         }
         return ingestLegacyLoop(documentId, edition, knowledgePoints, parsed);
+    }
+
+    /**
+     * 批 9 完整 premise 链（生产摄取链接线）。
+     *
+     * <p>工序顺序（不可调换）：
+     * <ol>
+     *   <li>{@code facade.parse}——页级路由/多后端解析；</li>
+     *   <li>{@link cn.studykid.rag.premise.normalize.NormalizationRules#normalize}——
+     *       页码基准/阅读顺序/字符区间/重复行噪声 + 可选跨页表合并；</li>
+     *   <li>{@code facade.chunk}——按装配策略查表切分（附录逻辑单位已注入切分器）；</li>
+     *   <li>可选 {@code ParentChildAssembler.assemble}——父子块（P2-1）。</li>
+     * </ol>
+     *
+     * <p>⚠️ 归一化传 {@code pageBaseAlreadyOneBased=true}：Docling/MinerU mapper
+     * 已在适配阶段完成页码 +1（见 NormalizationRules 的调用方纪律）；传 false 会整体 +1。
+     *
+     * <p>⚠️ fail-closed：门面 parse/chunk 抛异常时不吞、不回退 legacy——
+     * 「配了完整链却静默用旧切分」会让评测归因失真（切分策略留痕与实际不符）。
+     */
+    private @NonNull List<Chunk> ingestViaFullChain(@NonNull String documentId,
+                                                    @NonNull EditionCoordinate edition,
+                                                    @NonNull List<KnowledgePoint> knowledgePoints,
+                                                    @NonNull byte[] content) {
+        cn.studykid.rag.premise.model.PremiseDocument parsed =
+                premiseFacade.parse(documentId, content);
+        List<cn.studykid.rag.premise.model.PremiseBlock> normalized =
+                cn.studykid.rag.premise.normalize.NormalizationRules.normalize(
+                        parsed.blocks(), true, mergeTables);
+        cn.studykid.rag.premise.model.PremiseDocument normalizedDoc =
+                parsed.withBlocks(normalized);
+        cn.studykid.rag.premise.model.ChunkOutcome outcome = premiseFacade.chunk(
+                normalizedDoc,
+                premisePolicy,
+                new cn.studykid.rag.premise.model.ChunkContext(edition, knowledgePoints));
+        List<Chunk> chunks = outcome.chunks();
+        if (assembleParents) {
+            chunks = cn.studykid.rag.premise.chunker.ParentChildAssembler.assemble(
+                    documentId, chunks);
+        }
+        return chunks;
     }
 
     /**

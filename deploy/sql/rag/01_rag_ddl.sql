@@ -350,10 +350,14 @@ CREATE TABLE rag.rag_chunk (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     text_jieba text DEFAULT ''::text NOT NULL,
     scope text DEFAULT 'TENANT'::text NOT NULL,
+    parent_chunk_id uuid,
+    chunk_level integer DEFAULT 0 NOT NULL,
     CONSTRAINT rag_chunk_char_range_chk CHECK ((char_end >= char_start)),
     CONSTRAINT rag_chunk_char_start_chk CHECK ((char_start >= 0)),
     CONSTRAINT rag_chunk_page_chk CHECK ((page_number >= 1)),
-    CONSTRAINT rag_chunk_scope_ck CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id()))))
+    CONSTRAINT rag_chunk_scope_ck CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id())))),
+    CONSTRAINT rag_chunk_level_chk CHECK ((chunk_level = ANY (ARRAY[0, 1]))),
+    CONSTRAINT rag_chunk_child_parent_chk CHECK (((chunk_level = 0) OR (parent_chunk_id IS NOT NULL)))
 );
 
 ALTER TABLE ONLY rag.rag_chunk FORCE ROW LEVEL SECURITY;
@@ -1002,6 +1006,14 @@ CREATE INDEX rag_chunk_tenant_edition_idx ON rag.rag_chunk USING btree (tenant_i
 --
 
 CREATE INDEX rag_chunk_tenant_role_idx ON rag.rag_chunk USING btree (tenant_id, role);
+
+
+--
+-- Name: rag_chunk_parent_idx; Type: INDEX; Schema: rag; Owner: -
+-- 批 9 / P2-1：按父块 ID 批量回带（expandParents → loadByIds）。
+--
+
+CREATE INDEX rag_chunk_parent_idx ON rag.rag_chunk USING btree (tenant_id, parent_chunk_id) WHERE (parent_chunk_id IS NOT NULL);
 
 
 --

@@ -73,6 +73,13 @@ public class RagInfrastructureConfig {
     private double minScore;
 
     /**
+     * 批 9 / P2-1：父块回带灰度开关（默认 false 保既有检索行为）。
+     * ⚠️ 需配合摄取链 {@code rag.premise.ingest-chain.parent-child=true} 才有父块可回带。
+     */
+    @Value("${rag.retrieval.expand-parents:false}")
+    private boolean expandParents;
+
+    /**
      * 重索引每页扫描的片段数（键集分页）。
      *
      * <p>⚠️ 与 worker 共用同一属性名（{@code rag.indexer.batch-size}）：
@@ -309,7 +316,7 @@ public class RagInfrastructureConfig {
 
     @Bean
     public RetrievalOrchestrator retrievalOrchestrator(RetrievalPort retrievalPort) {
-        return new RetrievalOrchestrator(retrievalPort, minScore);
+        return new RetrievalOrchestrator(retrievalPort, minScore, expandParents);
     }
 
     /**

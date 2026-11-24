@@ -82,6 +82,21 @@ public record PremiseDocument(
     }
 
     /**
+     * 批 9：替换块序列（归一化/附录逻辑单位重写后用）。
+     *
+     * <p>⚠️ 逐字段带过 {@code trace / doclingJsonRef / markdownRef / pageCacheRef}（铁律 #8）：
+     * 归一化只改块，不改解析留痕与中间产物引用；漏带会让「可回取原文」门禁失效、
+     * 混合后端的 doclingJsonRef 被静默清空（HybridChunker 误 fail-closed）。
+     *
+     * @param newBlocks 重写后的块序列
+     * @return 仅块序列不同的新文档
+     */
+    public @NonNull PremiseDocument withBlocks(@NonNull List<PremiseBlock> newBlocks) {
+        return new PremiseDocument(documentId, newBlocks, trace, doclingJsonRef,
+                markdownRef, pageCacheRef);
+    }
+
+    /**
      * 从既有端口的解析产物构造（兼容路径：Docling / 占位解析器仍走
      * {@code DocumentParserPort}，此处只做包装，不做任何语义改动）。
      *

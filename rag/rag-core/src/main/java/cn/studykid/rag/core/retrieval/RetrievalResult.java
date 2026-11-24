@@ -241,7 +241,15 @@ public record RetrievalResult(
          * 单列一个值是为了让「这条为什么出现」的审计解释保持诚实——
          * 若复用 {@link #DENSE_VECTOR}，会让人以为本端做过向量召回。
          */
-        GENERATION_BASIS
+        GENERATION_BASIS,
+        /**
+         * 父子块回带（批 9 / P2-1）。
+         *
+         * <p>⚠️ 这些片段<b>不是被本端检索出来的</b>，而是检索命中子块后
+         * 按 {@code parent_chunk_id} 回带的父块上下文。单列一个值是为了
+         * 审计诚实——不能伪装成向量召回，也不能挤占 topK 名额。
+         */
+        PARENT_CONTEXT
     }
 
     /** 命中原因。 */
@@ -264,6 +272,8 @@ public record RetrievalResult(
          * <p>与 {@link RetrievalChannel#GENERATION_BASIS} 配对：
          * 说明「这条片段的出现是调用方的选择，不是检索器的判断」。
          */
-        CITED_AS_BASIS
+        CITED_AS_BASIS,
+        /** 由命中子块回带的父块上下文（批 9 / P2-1；与 PARENT_CONTEXT 通道配对）。 */
+        PARENT_EXPANSION
     }
 }
