@@ -272,7 +272,11 @@ public class WorkerInfraConfig {
             CorpusRepository corpusRepository,
             EmbeddingPort embeddingPort,
             JdbcTemplate jdbcTemplate,
-            PlatformTransactionManager txManager) {
+            PlatformTransactionManager txManager,
+            RagEmbeddingInputProperties embeddingInputProperties) {
+        // ⚠️ P3-1：装配期校验模板版本——未知版本不得静默回退 v1，
+        //    否则 chunk_policy_config 留痕的版本与实际渲染文本漂移。
+        embeddingInputProperties.validate();
         // ⚠️ V1.0.2 S2-3：真实的来源加载器替换 S1 的 Optional.empty() 占位。
         //    它需要 JDBC（读载体/版本/知识点）与**对象读取能力**。
         //    ⚠️ 对象存储端口住在 rag-management，而 worker **不依赖**管理面

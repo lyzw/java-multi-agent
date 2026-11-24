@@ -113,7 +113,11 @@ public class IngestJobOrchestrator {
             jobPort.advance(tenantId, jobId, IngestJobStatus.EMBEDDING, "EMBEDDING 0");
             int done = 0;
             for (Chunk chunk : chunks) {
-                float[] vector = embedWithRetry(chunk.text());
+                // ⚠️ P3-1：绝不把裸 chunk.text() 直接送 embedding——走统一模板，
+                //    把教材五轴/章节/位置/角色/知识点作为语义前缀，与检索侧 query 模板配套。
+                String embeddingText = cn.studykid.rag.core.embedding.EmbeddingInputTemplate
+                        .renderDocument(EmbeddingInputFactory.fromChunk(chunk, src.knowledgePoints()));
+                float[] vector = embedWithRetry(embeddingText);
                 corpusRepository.saveChunkAndEmbedding(
                         tenantId, chunk, src.editionId(), vector, embeddingPort.modelVersion());
                 done++;

@@ -189,10 +189,18 @@ public class IngestionPipeline {
      *         旧模式返回 null
      */
     public String chunkPolicyConfigTrace() {
+        String base;
         if (premiseFacade != null) {
-            return premiseFacade.config().stableString();
+            base = premiseFacade.config().stableString();
+        } else {
+            if (premiseConfig == null) {
+                return null;
+            }
+            base = premiseConfig.stableString();
         }
-        return premiseConfig == null ? null : premiseConfig.stableString();
+        // ⚠️ P3-1：模板版本必须与切分参数一起落 chunk_policy_config——
+        //    换模板会改变向量空间，若不留版本就无法解释「没改切分参数但召回变了」。
+        return base + "," + cn.studykid.rag.core.embedding.EmbeddingInputTemplate.configTrace();
     }
 
     /**

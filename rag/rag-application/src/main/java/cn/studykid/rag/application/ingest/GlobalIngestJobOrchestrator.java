@@ -93,7 +93,11 @@ public class GlobalIngestJobOrchestrator {
             jobPort.advanceGlobal(jobId, IngestJobStatus.EMBEDDING, "EMBEDDING 0");
             int done = 0;
             for (Chunk chunk : chunks) {
-                float[] vector = embedWithRetry(chunk.text());
+                // ⚠️ P3-1：与租户侧同一模板渲染（工厂共用），保证全局/租户两桶
+                //    相同片段的 embedding 输入逐字一致。
+                String embeddingText = cn.studykid.rag.core.embedding.EmbeddingInputTemplate
+                        .renderDocument(EmbeddingInputFactory.fromChunk(chunk, src.knowledgePoints()));
+                float[] vector = embedWithRetry(embeddingText);
                 corpusRepository.saveChunkAndEmbeddingInGlobalBucket(
                         chunk, src.editionId(), vector, embeddingPort.modelVersion());
                 done++;

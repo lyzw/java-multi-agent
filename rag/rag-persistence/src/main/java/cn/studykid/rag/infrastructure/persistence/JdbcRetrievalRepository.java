@@ -471,7 +471,12 @@ public class JdbcRetrievalRepository implements RetrievalPort {
     // ---------------------------------------------------------------------
 
     private List<ScoredChunk> denseSearch(RagScopeFilter scope, RetrievalRequest request) {
-        float[] queryVector = embeddingPort.embed(List.of(request.query())).get(0);
+        // ⚠️ P3-1 / D29 DEC-P7 M5：query 侧拼 instruction，doc 侧不加——
+        //    OpenAiCompatibleEmbeddingPort 没有 instruction 入参，只能在文本里拼。
+        //    两侧模板不对称是刻意的：query 要「检索意图」语义，doc 要「知识陈述」语义。
+        String queryInput = cn.studykid.rag.core.embedding.EmbeddingInputTemplate
+                .renderQuery(request.query());
+        float[] queryVector = embeddingPort.embed(List.of(queryInput)).get(0);
         vectorColumn.requireDimension(queryVector);
         String vec = vectorToString(queryVector);
         String cast = vectorColumn.castPlaceholder();

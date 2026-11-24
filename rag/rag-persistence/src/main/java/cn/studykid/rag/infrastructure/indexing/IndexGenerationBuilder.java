@@ -125,12 +125,26 @@ public class IndexGenerationBuilder {
      * 否则会出现「日常索引不进未校验语料，但换模型时进了」的口径裂缝。
      */
     static final String SCAN_SQL = """
-            SELECT c.chunk_id, c.text
+            SELECT c.chunk_id, c.text, c.role::text, c.page_number, c.section_path,
+                   c.exercise_no, c.block_type,
+                   COALESCE(ed.publisher, '') AS publisher, COALESCE(ed.grade, '') AS grade,
+                   COALESCE(ed.term, '') AS term, COALESCE(ed.revision_code, '') AS revision_code,
+                   COALESCE(kp.names, ARRAY[]::text[]) AS kp_names,
+                   COALESCE(kp.aliases, ARRAY[]::text[]) AS kp_aliases
             FROM rag_chunk c
             JOIN rag_document doc
                  ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
             JOIN rag_source src
                  ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
+            LEFT JOIN rag_edition ed
+                 ON ed.edition_id = c.edition_id AND ed.tenant_id = c.tenant_id
+            LEFT JOIN LATERAL (
+                   SELECT array_agg(k.canonical_name ORDER BY k.canonical_name) AS names,
+                          array_agg(array_to_string(COALESCE(k.aliases, ARRAY[]::text[]), '; ')
+                                    ORDER BY k.canonical_name) AS aliases
+                     FROM rag_knowledge_point k
+                    WHERE k.tenant_id = c.tenant_id AND k.kp_id = ANY(c.kp_ids)
+            ) kp ON true
             WHERE c.tenant_id = {rag_tenant}
               AND src.ver_status = 'VERIFIED'
               AND doc.ver_status = 'VERIFIED'
@@ -477,7 +491,15 @@ public class IndexGenerationBuilder {
         List<PendingChunk> rows = channel.tx().execute(status -> {
             channel.bindSession();
             return channel.template().query(channel.scanSql(),
-                    (rs, i) -> new PendingChunk(rs.getString(1), rs.getString(2)),
+                    (rs, i) -> new PendingChunk(
+                            rs.getString("chunk_id"), rs.getString("text"),
+                            rs.getString("role"), rs.getInt("page_number"),
+                            rs.getString("section_path"), rs.getString("exercise_no"),
+                            rs.getString("block_type"),
+                            rs.getString("publisher"), rs.getString("grade"),
+                            rs.getString("term"), rs.getString("revision_code"),
+                            ChunkIndexer.readTextArray(rs, "kp_names"),
+                            ChunkIndexer.readTextArray(rs, "kp_aliases")),
                     afterChunkId, batchSize);
         });
         return rows == null ? List.of() : rows;
@@ -487,7 +509,10 @@ public class IndexGenerationBuilder {
     private void indexOneOn(@NonNull ScanChannel channel,
                             @NonNull String tenantId, int generation,
                             @NonNull PendingChunk pending) {
-        float[] vector = embeddingPort.embed(List.of(pending.text)).get(0);
+        // ⚠️ P3-1：与首次摄取/ChunkIndexer 同构的模板输入（换模型重算也必须逐字一致）。
+        String embeddingText = cn.studykid.rag.core.embedding.EmbeddingInputTemplate.renderDocument(
+                pending.toEmbeddingInput());
+        float[] vector = embeddingPort.embed(List.of(embeddingText)).get(0);
         if (channel.isGlobal()) {
             // ⚠️ 全局桶走专属写入方法：它在运维会话窗内执行、
             //    桶谓词写死 rag_global_tenant_id()，不接受租户参数。
@@ -500,6 +525,29 @@ public class IndexGenerationBuilder {
     }
 
     /** 待处理片段（id + 正文）。 */
-    public record PendingChunk(@NonNull String chunkId, @NonNull String text) {
+    public record PendingChunk(@NonNull String chunkId, @NonNull String text,
+                               @org.jspecify.annotations.Nullable String role, int pageNumber,
+                               @org.jspecify.annotations.Nullable String sectionPath,
+                               @org.jspecify.annotations.Nullable String exerciseNo,
+                               @org.jspecify.annotations.Nullable String blockType,
+                               @NonNull String publisher, @NonNull String grade,
+                               @NonNull String term, @NonNull String revisionCode,
+                               @NonNull List<String> kpNames,
+                               @NonNull List<String> kpAliases) {
+
+        /** 兼容构造：仅用于测试夹具。 */
+        public PendingChunk(@NonNull String chunkId, @NonNull String text) {
+            this(chunkId, text, "EXPLANATION", 1, "", null, null,
+                    "", "", "", "", java.util.List.of(), java.util.List.of());
+        }
+
+        cn.studykid.rag.core.embedding.EmbeddingInput toEmbeddingInput() {
+            return cn.studykid.rag.core.embedding.EmbeddingInputBuilder.fromScanRow(
+                    publisher == null ? "" : publisher, grade == null ? "" : grade,
+                    term == null ? "" : term, revisionCode == null ? "" : revisionCode,
+                    sectionPath == null ? "" : sectionPath, pageNumber,
+                    exerciseNo, blockType, role == null ? "EXPLANATION" : role,
+                    text, kpNames, kpAliases);
+        }
     }
 }

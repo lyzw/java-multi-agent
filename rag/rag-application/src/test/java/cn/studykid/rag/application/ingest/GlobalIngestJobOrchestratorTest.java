@@ -77,6 +77,31 @@ class GlobalIngestJobOrchestratorTest {
     }
 
     @Test
+    @org.junit.jupiter.api.DisplayName("P3-1 反证：摄取编排器送 embedding 的是模板文本，不是裸 chunk.text()")
+    void ingestEmbedsTemplateText() {
+        when(sourcePort.load("src-1")).thenReturn(Optional.of(sourceView()));
+        Chunk c1 = chunk("c1");
+        when(pipeline.ingest(any(), any(), any(), any(), any())).thenReturn(List.of(c1));
+        when(embeddingPort.embed(any())).thenReturn(List.of(new float[] {0.1f, 0.2f, 0.3f, 0.4f}));
+        when(embeddingPort.modelVersion()).thenReturn(modelVersion);
+
+        orchestrator().run(parsingJob());
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<List<String>> captor =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(embeddingPort).embed(captor.capture());
+        String sent = captor.getValue().get(0);
+        // EDITION 是华师大版·六年级上册·2024修订，displayName 由工厂写入教材前缀
+        org.junit.jupiter.api.Assertions.assertTrue(sent.contains("[教材:"),
+                "必须走模板，实际=" + sent);
+        org.junit.jupiter.api.Assertions.assertTrue(sent.contains("知识点文本-c1"),
+                "模板须保留正文");
+        org.junit.jupiter.api.Assertions.assertNotEquals(c1.text(), sent,
+                "裸正文不得直接送 embedding（撤掉模板调用此断言转红）");
+    }
+
+    @Test
     void happyPathWritesOnlyThroughGlobalMethodsAndMarksSucceeded() {
         when(sourcePort.load("src-1")).thenReturn(Optional.of(sourceView()));
         Chunk c1 = chunk("c1");

@@ -195,7 +195,14 @@ public class ChunkIndexer {
                 // ⚠️ 必须用 queryForObject() 而非 update()：set_config 是 SELECT，会返回一行，
                 //    update() 期望「无结果集」，否则抛 DataIntegrityViolation。
                 return channel.template().query(channel.pendingSql(),
-                        (rs, i) -> new PendingChunk(rs.getString("chunk_id"), rs.getString("text")),
+                        (rs, i) -> new PendingChunk(
+                                rs.getString("chunk_id"), rs.getString("text"),
+                                rs.getString("role"), rs.getInt("page_number"),
+                                rs.getString("section_path"), rs.getString("exercise_no"),
+                                rs.getString("block_type"),
+                                rs.getString("publisher"), rs.getString("grade"),
+                                rs.getString("term"), rs.getString("revision_code"),
+                                readTextArray(rs, "kp_names"), readTextArray(rs, "kp_aliases")),
                         cursor, pageSize);
             });
             if (page == null || page.isEmpty()) {
@@ -240,8 +247,13 @@ public class ChunkIndexer {
      * 运维角色带 BYPASSRLS，库层不再替我们限制「写到哪个桶」。
      */
     private void writeChunk(ScanChannel channel, PendingChunk pending) {
+        // ⚠️ 词法通道仍走**裸正文**：text_jieba 只服务词法命中，拼教材元数据会稀释关键词。
         String jieba = ChineseTokenizer.tokenize(pending.text);
-        float[] vector = embeddingPort.embed(List.of(pending.text)).get(0);
+        // ⚠️ P3-1：稠密通道走**与首次摄取同构的模板**——扫描 SQL 已 join edition/kp 元数据，
+        //    用同一 EmbeddingInputTemplate 渲染，避免「摄取模板、重算裸文」的向量漂移。
+        String embeddingText = cn.studykid.rag.core.embedding.EmbeddingInputTemplate.renderDocument(
+                pending.toEmbeddingInput());
+        float[] vector = embeddingPort.embed(List.of(embeddingText)).get(0);
         if (channel.isGlobal()) {
             corpusRepository.updateJiebaTokensInGlobalBucket(pending.chunkId, jieba);
             corpusRepository.upsertEmbeddingInGlobalBucket(
@@ -306,8 +318,47 @@ public class ChunkIndexer {
      * <p>⚠️ 包可见而非 private：单元测试需要构造它以验证「限量扫描」语义，
      * 但它<b>不是</b>对外 API——公开成 public 会让调用方误以为可以自己造行喂进来。
      */
-    record PendingChunk(String chunkId, String text) {
+    record PendingChunk(String chunkId, String text, String role, int pageNumber,
+                        String sectionPath, String exerciseNo, String blockType,
+                        String publisher, String grade, String term, String revisionCode,
+                        java.util.List<String> kpNames, java.util.List<String> kpAliases) {
 
+        /** 兼容构造：仅用于测试夹具（无元数据时退化为最小模板入参）。 */
+        PendingChunk(String chunkId, String text) {
+            this(chunkId, text, "EXPLANATION", 1, "", null, null,
+                    "", "", "", "", java.util.List.of(), java.util.List.of());
+        }
+
+        cn.studykid.rag.core.embedding.EmbeddingInput toEmbeddingInput() {
+            return cn.studykid.rag.core.embedding.EmbeddingInputBuilder.fromScanRow(
+                    publisher, grade, term, revisionCode, sectionPath, pageNumber,
+                    exerciseNo, blockType, role, text, kpNames, kpAliases);
+        }
+    }
+
+    /**
+     * 读 PG TEXT[] 列为不可变 List（null 元素归一为空串，避免 List.of 抛 NPE）。
+     *
+     * <p>⚠️ 必须用 {@code getArray().getArray()} 而非 {@code getObject(String[].class)}：
+     * 后者只对表列 {@code text[]} 有效，对 {@code array_agg()} 产生的 {@code _text}
+     * 会在真库抛 {@code conversion to class [Ljava.lang.String; from _text not supported}
+     * （单测 mock 不执行真实 RowMapper，掩盖了这个差异；真库 IT 抓到）。
+     */
+    static @NonNull List<String> readTextArray(
+            java.sql.ResultSet rs, @NonNull String column) throws java.sql.SQLException {
+        java.sql.Array sqlArray = rs.getArray(column);
+        if (sqlArray == null) {
+            return List.of();
+        }
+        Object rawObj = sqlArray.getArray();
+        if (!(rawObj instanceof String[] raw)) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>(raw.length);
+        for (String s : raw) {
+            out.add(s == null ? "" : s);
+        }
+        return List.copyOf(out);
     }
 
     /**
@@ -338,12 +389,26 @@ public class ChunkIndexer {
      * 故此前一直潜伏。写 {@code ?::uuid} 让游标按 uuid 参与比较。
      */
     static final String PENDING_SQL = """
-            SELECT c.chunk_id, c.text
+            SELECT c.chunk_id, c.text, c.role::text, c.page_number, c.section_path,
+                   c.exercise_no, c.block_type,
+                   COALESCE(ed.publisher, '') AS publisher, COALESCE(ed.grade, '') AS grade,
+                   COALESCE(ed.term, '') AS term, COALESCE(ed.revision_code, '') AS revision_code,
+                   COALESCE(kp.names, ARRAY[]::text[]) AS kp_names,
+                   COALESCE(kp.aliases, ARRAY[]::text[]) AS kp_aliases
             FROM rag_chunk c
             JOIN rag_document doc
                  ON c.document_id = doc.document_id AND c.tenant_id = doc.tenant_id
             JOIN rag_source src
                  ON doc.source_id = src.source_id AND c.tenant_id = src.tenant_id
+            LEFT JOIN rag_edition ed
+                 ON ed.edition_id = c.edition_id AND ed.tenant_id = c.tenant_id
+            LEFT JOIN LATERAL (
+                   SELECT array_agg(k.canonical_name ORDER BY k.canonical_name) AS names,
+                          array_agg(array_to_string(COALESCE(k.aliases, ARRAY[]::text[]), '; ')
+                                    ORDER BY k.canonical_name) AS aliases
+                     FROM rag_knowledge_point k
+                    WHERE k.tenant_id = c.tenant_id AND k.kp_id = ANY(c.kp_ids)
+            ) kp ON true
             WHERE c.tenant_id = {rag_tenant}
               AND src.ver_status = 'VERIFIED'
               AND doc.ver_status = 'VERIFIED'
