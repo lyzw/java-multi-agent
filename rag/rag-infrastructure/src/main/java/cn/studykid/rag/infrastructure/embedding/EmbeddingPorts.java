@@ -41,6 +41,26 @@ public final class EmbeddingPorts {
     public static EmbeddingPort create(boolean localPortsEnabled, String baseUrl, String apiKey,
                                        String model, int dimension, int batchSize,
                                        int timeoutSeconds, String assembler) {
+        // 既有路径：原生维度 = 输出维度，不做 MRL 截断，行为与改造前逐字一致。
+        return createWithMrl(localPortsEnabled, baseUrl, apiKey, model, dimension, dimension,
+                batchSize, timeoutSeconds, assembler);
+    }
+
+    /**
+     * 支持 MRL 截断的装配（D29 DEC-P2）。
+     *
+     * <p>与 {@link #create} 共用同一套 fail-closed 选择规则；仅当真实模型端口被选中时，
+     * 才把 {@code nativeDimension} / {@code outputDimension} 传给
+     * {@link OpenAiCompatibleEmbeddingPort}。本地占位端口固定 1024 维，不接受截断参数
+     * （占位向量不承载语义，MRL 档位对它无意义）。
+     *
+     * @param nativeDimension 服务端原生返回维度（如 4096）
+     * @param outputDimension 写入向量列的输出维度（如 1024）；
+     *                        必须 {@code <=} 原生维度，否则 {@link OpenAiCompatibleEmbeddingPort} 构造期拒绝
+     */
+    public static EmbeddingPort createWithMrl(boolean localPortsEnabled, String baseUrl, String apiKey,
+                                              String model, int nativeDimension, int outputDimension,
+                                              int batchSize, int timeoutSeconds, String assembler) {
         boolean realConfigured = baseUrl != null && !baseUrl.isBlank();
         if (!realConfigured) {
             LocalPortGate.requireEnabled(localPortsEnabled,
@@ -59,7 +79,7 @@ public final class EmbeddingPorts {
                     或清空 rag.embedding.base-url 并显式设置 RAG_LOCAL_PORTS_ENABLED=true。"""
                     .formatted(baseUrl));
         }
-        return new OpenAiCompatibleEmbeddingPort(baseUrl, apiKey, model, dimension, batchSize,
-                Duration.ofSeconds(timeoutSeconds));
+        return new OpenAiCompatibleEmbeddingPort(baseUrl, apiKey, model, nativeDimension,
+                outputDimension, batchSize, Duration.ofSeconds(timeoutSeconds));
     }
 }

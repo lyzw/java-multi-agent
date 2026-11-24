@@ -248,4 +248,82 @@ class OpenAiCompatibleEmbeddingPortTest {
         assertThrows(IllegalStateException.class,
                 () -> EmbeddingPorts.create(false, null, null, null, 1024, 16, 5, "test"));
     }
+
+    // ── MRL 截断（D29 DEC-P2）────────────────────────────────────
+
+    /** 假网关回 4096 维：前 1024 维是 [1,2,...], 后 3072 维小值，截断后不归一化会明显 <1。 */
+    private void respondMrl4096() {
+        register((exchange, body) -> {
+            int count = new ObjectMapper().readTree(body).path("input").size();
+            StringBuilder sb = new StringBuilder("{\"data\":[");
+            for (int i = 0; i < count; i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                sb.append("{\"index\":").append(i).append(",\"embedding\":[");
+                for (int d = 0; d < 4096; d++) {
+                    double v = d < 1024 ? (d % 13 + 1) : 0.01;
+                    sb.append(v).append(d + 1 == 4096 ? "" : ",");
+                }
+                sb.append("]}");
+            }
+            write(exchange, 200, sb.append("]}").toString());
+        });
+    }
+
+    @Test
+    void mrlTruncatesToOutputDimensionAndRenormalizes() {
+        respondMrl4096();
+        OpenAiCompatibleEmbeddingPort p = new OpenAiCompatibleEmbeddingPort(
+                baseUrl, "k", "qwen3-embedding:8b", 4096, 1024, 16, Duration.ofSeconds(5));
+
+        java.util.List<float[]> vectors = p.embed(java.util.List.of("二次函数顶点式", "光合作用"));
+
+        assertEquals(2, vectors.size());
+        assertEquals(1024, p.dimension(), "对外维度=输出维度，必须与向量列一致");
+        assertEquals(1024, vectors.get(0).length);
+        assertEquals(1.0, MrlProjector.l2Norm(vectors.get(0)), 1e-5,
+                "截断后必须是单位范数（反证：去掉 MrlProjector.project 的归一化即转红）");
+    }
+
+    @Test
+    void mrlModelVersionCarriesDimensionToIsolateGenerations() {
+        respondMrl4096();
+        OpenAiCompatibleEmbeddingPort mrl = new OpenAiCompatibleEmbeddingPort(
+                baseUrl, "k", "qwen3-embedding:8b", 4096, 1024, 16, Duration.ofSeconds(5));
+        assertEquals("qwen3-embedding:8b@mrl1024", mrl.modelVersion(),
+                "不同 MRL 档位必须是不同 embed_model，防止跨代际混算余弦");
+
+        // 未截断时版本标记不变，保证既有行为逐字一致
+        OpenAiCompatibleEmbeddingPort plain = port(4096, 16);
+        assertEquals("fake-model", plain.modelVersion());
+    }
+
+    @Test
+    void rejectsOutputDimensionLargerThanNative() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> new OpenAiCompatibleEmbeddingPort(baseUrl, "k", "m", 1024, 4096,
+                        16, Duration.ofSeconds(5)));
+        assertTrue(e.getMessage().contains("零填充"), e.getMessage());
+    }
+
+    @Test
+    void mrlStillValidatesNativeDimensionFromServer() {
+        // 服务端只回 2 维，却声称原生 4096 → 必须在投影前就拒绝，而不是零填充成 1024
+        respond("{\"data\":[{\"index\":0,\"embedding\":[0.1,0.2]}]}");
+        OpenAiCompatibleEmbeddingPort p = new OpenAiCompatibleEmbeddingPort(
+                baseUrl, "k", "m", 4096, 1024, 16, Duration.ofSeconds(5));
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> p.embed(java.util.List.of("x")));
+        assertTrue(e.getMessage().contains("原生维度期望 4096"), e.getMessage());
+    }
+
+    @Test
+    void createWithMrlWiresNativeAndOutputSeparately() {
+        EmbeddingPort port = EmbeddingPorts.createWithMrl(
+                false, baseUrl, "k", "m", 4096, 1024, 16, 5, "test");
+        assertInstanceOf(OpenAiCompatibleEmbeddingPort.class, port);
+        assertEquals(1024, port.dimension());
+        assertEquals("m@mrl1024", port.modelVersion());
+    }
 }

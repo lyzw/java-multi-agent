@@ -32,6 +32,11 @@ import tools.jackson.databind.ObjectMapper;
  * <p><b>⚠️ 换模型必须重建索引</b>：{@link #modelVersion()} 会写进
  * {@code rag_chunk_embedding.embed_model}；不同模型的向量空间不可比，
  * 旧向量不会被新查询向量正确命中（RAG-D03 §5 的代际机制）。
+ *
+ * <p><b>⚠️ MRL 维度分离（D29 DEC-P2）</b>：服务端原生维度（{@code nativeDimension}）
+ * 与写入向量列的输出维度（{@code outputDimension}）是两个概念。当输出维度更小，
+ * 本端口在拿到原生向量后经 {@link MrlProjector} 取前缀并<b>重新 L2 归一化</b>。
+ * 旧构造两者相等（不截断），行为与改造前逐字一致；只有新构造显式给出更小的输出维度才启用截断。
  */
 public class OpenAiCompatibleEmbeddingPort implements EmbeddingPort {
 
@@ -44,7 +49,10 @@ public class OpenAiCompatibleEmbeddingPort implements EmbeddingPort {
     private final String endpoint;
     private final String apiKey;
     private final String model;
-    private final int expectedDimension;
+    /** 服务端原生返回维度（请求不做 dimensions 截断时模型实际吐出的维数）。 */
+    private final int nativeDimension;
+    /** 写入向量列的输出维度；小于原生维度时启用 MRL 前缀截断 + L2 重归一。 */
+    private final int outputDimension;
     private final int batchSize;
     private final Duration timeout;
     private final HttpClient httpClient;
@@ -52,20 +60,44 @@ public class OpenAiCompatibleEmbeddingPort implements EmbeddingPort {
 
     public OpenAiCompatibleEmbeddingPort(String baseUrl, String apiKey, String model,
                                          int expectedDimension) {
-        this(baseUrl, apiKey, model, expectedDimension, DEFAULT_BATCH_SIZE, DEFAULT_TIMEOUT);
+        this(baseUrl, apiKey, model, expectedDimension, expectedDimension,
+                DEFAULT_BATCH_SIZE, DEFAULT_TIMEOUT);
     }
 
     public OpenAiCompatibleEmbeddingPort(String baseUrl, String apiKey, String model,
                                          int expectedDimension, int batchSize, Duration timeout) {
+        this(baseUrl, apiKey, model, expectedDimension, expectedDimension, batchSize, timeout);
+    }
+
+    /**
+     * 支持 MRL 截断的构造（D29 DEC-P2）。
+     *
+     * @param nativeDimension 服务端原生返回维度（如 4096）
+     * @param outputDimension 写入向量列的输出维度（如 1024）；
+     *                        等于原生维度时不截断，小于时取前缀并重 L2 归一化，
+     *                        大于原生维度直接拒绝（⛔ 禁止零填充伪造维度）
+     */
+    public OpenAiCompatibleEmbeddingPort(String baseUrl, String apiKey, String model,
+                                         int nativeDimension, int outputDimension,
+                                         int batchSize, Duration timeout) {
         if (baseUrl == null || baseUrl.isBlank()) {
             throw new IllegalArgumentException("Embedding 服务地址（rag.embedding.base-url）不能为空");
         }
         if (model == null || model.isBlank()) {
             throw new IllegalArgumentException("Embedding 模型标识（rag.embedding.model）不能为空");
         }
-        if (expectedDimension <= 0) {
+        if (nativeDimension <= 0) {
             throw new IllegalArgumentException(
-                    "Embedding 维度（rag.embedding.dimension）必须为正数，当前=" + expectedDimension);
+                    "Embedding 原生维度（rag.embedding.native-dimension）必须为正数，当前=" + nativeDimension);
+        }
+        if (outputDimension <= 0) {
+            throw new IllegalArgumentException(
+                    "Embedding 输出维度（rag.embedding.dimension）必须为正数，当前=" + outputDimension);
+        }
+        if (outputDimension > nativeDimension) {
+            throw new IllegalArgumentException(
+                    "Embedding 输出维度(" + outputDimension + ")不能大于原生维度(" + nativeDimension
+                            + ")——MRL 只能截断，禁止零填充伪造维度（D29 DEC-P2 S3）");
         }
         if (batchSize <= 0) {
             throw new IllegalArgumentException("Embedding 批大小必须为正数，当前=" + batchSize);
@@ -76,7 +108,8 @@ public class OpenAiCompatibleEmbeddingPort implements EmbeddingPort {
         // Ollama 不校验 key，但 OpenAI 协议的 Authorization 头不能是空值；缺省用占位串
         this.apiKey = (apiKey == null || apiKey.isBlank()) ? "empty" : apiKey;
         this.model = model;
-        this.expectedDimension = expectedDimension;
+        this.nativeDimension = nativeDimension;
+        this.outputDimension = outputDimension;
         this.batchSize = batchSize;
         this.timeout = timeout == null ? DEFAULT_TIMEOUT : timeout;
         this.httpClient = HttpClient.newBuilder().connectTimeout(this.timeout).build();
@@ -98,12 +131,17 @@ public class OpenAiCompatibleEmbeddingPort implements EmbeddingPort {
 
     @Override
     public @NonNull String modelVersion() {
-        return model;
+        // 截断档位写进版本标记：同一模型的不同 MRL 档位是不同的向量空间，
+        // 混用会让「4096 代际的查询向量打到 1024 代际的库」静默产生错分（D18 代际纪律）。
+        return outputDimension == nativeDimension
+                ? model
+                : model + "@mrl" + outputDimension;
     }
 
     @Override
     public int dimension() {
-        return expectedDimension;
+        // 对外暴露的是写入向量列的维度，必须与 rag_chunk_embedding 的列维度一致。
+        return outputDimension;
     }
 
     private List<float[]> embedBatch(List<String> batch) {
@@ -158,7 +196,12 @@ public class OpenAiCompatibleEmbeddingPort implements EmbeddingPort {
                 throw new IllegalStateException("Embedding 响应缺少第 " + i + " 条向量，"
                         + "返回条数与请求条数不一致");
             }
-            vectors.add(ordered[i]);
+            // MRL：原生向量到手后取前 outputDimension 维并重新 L2 归一化（D29 DEC-P2 S1）。
+            // 不截断时 project 是恒等（长度相等、原向量已归一或由服务端保证），
+            // 为避免无谓开销与改变既有行为，仅在档位不同时才投影。
+            vectors.add(outputDimension == nativeDimension
+                    ? ordered[i]
+                    : MrlProjector.project(ordered[i], outputDimension));
         }
         return vectors;
     }
@@ -167,16 +210,18 @@ public class OpenAiCompatibleEmbeddingPort implements EmbeddingPort {
         if (!embedding.isArray()) {
             throw new IllegalStateException("Embedding 响应的 embedding 不是数组");
         }
-        if (embedding.size() != expectedDimension) {
+        // ⚠️ 校验的是服务端「原生」维度，不是输出维度：
+        //    截断发生在投影阶段，服务端必须先如实返回 nativeDimension 维。
+        if (embedding.size() != nativeDimension) {
             throw new IllegalStateException("""
-                    Embedding 维度不匹配：模型 %s 返回 %d 维，配置与向量列期望 %d 维。
+                    Embedding 维度不匹配：模型 %s 返回 %d 维，原生维度期望 %d 维。
                     这通常是「换了嵌入模型但没改配置/没迁列」——
-                    三者必须同时改：rag.embedding.dimension、
+                    三者必须同时改：rag.embedding.native-dimension、
                     rag_chunk_embedding.embedding 的列类型、以及全量重建索引。"""
-                    .formatted(model, embedding.size(), expectedDimension));
+                    .formatted(model, embedding.size(), nativeDimension));
         }
-        float[] vector = new float[expectedDimension];
-        for (int i = 0; i < expectedDimension; i++) {
+        float[] vector = new float[nativeDimension];
+        for (int i = 0; i < nativeDimension; i++) {
             vector[i] = (float) embedding.get(i).asDouble();
         }
         return vector;
