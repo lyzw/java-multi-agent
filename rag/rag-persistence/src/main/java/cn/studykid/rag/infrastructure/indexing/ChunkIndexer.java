@@ -200,6 +200,8 @@ public class ChunkIndexer {
                                 rs.getString("role"), rs.getInt("page_number"),
                                 rs.getString("section_path"), rs.getString("exercise_no"),
                                 rs.getString("block_type"),
+                                rs.getString("formula_natural_language"),
+                                rs.getString("caption_or_table_summary"),
                                 rs.getString("publisher"), rs.getString("grade"),
                                 rs.getString("term"), rs.getString("revision_code"),
                                 readTextArray(rs, "kp_names"), readTextArray(rs, "kp_aliases")),
@@ -320,19 +322,31 @@ public class ChunkIndexer {
      */
     record PendingChunk(String chunkId, String text, String role, int pageNumber,
                         String sectionPath, String exerciseNo, String blockType,
+                        String formulaNaturalLanguage, String captionOrTableSummary,
                         String publisher, String grade, String term, String revisionCode,
                         java.util.List<String> kpNames, java.util.List<String> kpAliases) {
 
         /** 兼容构造：仅用于测试夹具（无元数据时退化为最小模板入参）。 */
         PendingChunk(String chunkId, String text) {
             this(chunkId, text, "EXPLANATION", 1, "", null, null,
-                    "", "", "", "", java.util.List.of(), java.util.List.of());
+                    null, null, "", "", "", "",
+                    java.util.List.of(), java.util.List.of());
+        }
+
+        /** 兼容构造：P3-1 之前的 13 参签名（无语义槽位），供既有测试夹具零改。 */
+        PendingChunk(String chunkId, String text, String role, int pageNumber,
+                     String sectionPath, String exerciseNo, String blockType,
+                     String publisher, String grade, String term, String revisionCode,
+                     java.util.List<String> kpNames, java.util.List<String> kpAliases) {
+            this(chunkId, text, role, pageNumber, sectionPath, exerciseNo, blockType,
+                    null, null, publisher, grade, term, revisionCode, kpNames, kpAliases);
         }
 
         cn.studykid.rag.core.embedding.EmbeddingInput toEmbeddingInput() {
             return cn.studykid.rag.core.embedding.EmbeddingInputBuilder.fromScanRow(
                     publisher, grade, term, revisionCode, sectionPath, pageNumber,
-                    exerciseNo, blockType, role, text, kpNames, kpAliases);
+                    exerciseNo, blockType, role, text, kpNames, kpAliases,
+                    formulaNaturalLanguage, captionOrTableSummary);
         }
     }
 
@@ -391,6 +405,7 @@ public class ChunkIndexer {
     static final String PENDING_SQL = """
             SELECT c.chunk_id, c.text, c.role::text, c.page_number, c.section_path,
                    c.exercise_no, c.block_type,
+                   c.formula_natural_language, c.caption_or_table_summary,
                    COALESCE(ed.publisher, '') AS publisher, COALESCE(ed.grade, '') AS grade,
                    COALESCE(ed.term, '') AS term, COALESCE(ed.revision_code, '') AS revision_code,
                    COALESCE(kp.names, ARRAY[]::text[]) AS kp_names,

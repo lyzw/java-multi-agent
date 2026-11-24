@@ -115,6 +115,7 @@ public class JdbcRetrievalRepository implements RetrievalPort {
             c.section_path, c.exercise_no, c.char_start, c.char_end,
             c.kp_ids, c.exercise_ref, c.content_hash,
             c.parent_chunk_id, c.chunk_level,
+            c.formula_natural_language, c.caption_or_table_summary,
             ed.subject, ed.grade, ed.term, ed.publisher, ed.revision_code
             """;
 
@@ -635,12 +636,16 @@ public class JdbcRetrievalRepository implements RetrievalPort {
         String parentId = rs.getString("parent_chunk_id");
         boolean parentIsNull = rs.wasNull();
         int chunkLevel = rs.getInt("chunk_level");
+        // ⚠️ P3-1：embedding 语义槽位（getString 天然返回 null，无需 wasNull）。
+        String formulaSemantics = rs.getString("formula_natural_language");
+        String captionSummary = rs.getString("caption_or_table_summary");
         EditionCoordinate edition = toEdition(rs);
         Chunk.Locator locator = new Chunk.Locator(
                 page, sectionPath, exerciseNo, charStart, charEnd);
         return new Chunk(id, documentId, edition, role, text, locator,
                 kpIds, exerciseRef, contentHash, null,
-                parentIsNull ? null : parentId, chunkLevel);
+                parentIsNull ? null : parentId, chunkLevel,
+                formulaSemantics, captionSummary);
     }
 
     private KnowledgePoint mapKnowledgePoint(ResultSet rs) throws SQLException {

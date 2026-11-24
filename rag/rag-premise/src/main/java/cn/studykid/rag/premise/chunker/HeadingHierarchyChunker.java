@@ -135,6 +135,14 @@ public class HeadingHierarchyChunker implements cn.studykid.rag.premise.spi.Bloc
                     BlockRoleResolver.matchedSolutionPrefix(block.text()));
 
             // ⑦ 生成片段（超预算且不在答案区时拆分）
+            // ⚠️ P3-1：embedding 语义必须在 PremiseBlock 解包成 LayoutBlock **之前**采集，
+            //    解包后 FormulaAnnotation / TableGrid 就丢了（它们挂在包装层，不在端口块上）。
+            //    fail-closed：未命中的公式 embeddingView() 只回 LaTeX（不猜语义）；
+            //    非表格块无网格 → null；图片块无 VLM caption（P1-7 未落地）→ null。
+            String formulaSemantics = premiseBlock.hasFormulaAnnotation()
+                    ? premiseBlock.formulaAnnotation().embeddingView() : null;
+            String captionSummary = premiseBlock.hasTableGrid()
+                    ? premiseBlock.tableGrid().toEmbeddingSummary() : null;
             int page = block.pageNumber();
             String resolvedPath = SectionPathResolver.resolve(sectionPath, block);
             String text = block.text();
@@ -145,12 +153,12 @@ public class HeadingHierarchyChunker implements cn.studykid.rag.premise.spi.Bloc
                     chunks.add(newChunk(documentId, context, piece.text(), page, resolvedPath,
                             effectiveExerciseNo, currentExerciseNo, facts, role,
                             page, block.charStart() + piece.start(),
-                            block.charStart() + piece.end()));
+                            block.charStart() + piece.end(), formulaSemantics, captionSummary));
                 }
             } else {
                 chunks.add(newChunk(documentId, context, text, page, resolvedPath,
                         effectiveExerciseNo, currentExerciseNo, facts, role,
-                        page, block.charStart(), block.charEnd()));
+                        page, block.charStart(), block.charEnd(), formulaSemantics, captionSummary));
             }
         }
 
@@ -165,7 +173,8 @@ public class HeadingHierarchyChunker implements cn.studykid.rag.premise.spi.Bloc
                            String sectionPath, String effectiveExerciseNo,
                            String currentExerciseNo, LayoutFacts facts,
                            ChunkRole wholeBlockRole,
-                           int locatorPage, int charStart, int charEnd) {
+                           int locatorPage, int charStart, int charEnd,
+                           String formulaSemantics, String captionSummary) {
         String trimmed = rawText.trim();
         // ⚠️ 片级角色 = 片级前缀兜底判定，未命中时回落整块角色（主循环判定结果）。
         //    两个判定入口是同一张表（BlockRoleResolver），拆分片可能落在前缀之后
@@ -184,7 +193,9 @@ public class HeadingHierarchyChunker implements cn.studykid.rag.premise.spi.Bloc
                 matchedKpIds(trimmed, context),
                 currentExerciseNo,
                 ChunkIdentifiers.contentHash(trimmed),
-                facts);
+                facts,
+                null, Chunk.LEVEL_PARENT,
+                formulaSemantics, captionSummary);
     }
 
     private List<String> matchedKpIds(String text, ChunkContext context) {

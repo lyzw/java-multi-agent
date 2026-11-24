@@ -130,6 +130,35 @@ public final class TableGrid {
         return sb.toString().stripTrailing();
     }
 
+    /**
+     * embedding 用的表格摘要（RAG-D28 P3-1 / §6.1 {@code captionOrTableSummary} 槽位）。
+     *
+     * <p><b>⚠️ 确定性结构摘要，不生成自然语言</b>：只陈述行数/列数与表头原文
+     * （后端标注的表头行；未标注时按 Markdown 渲染口径取第一行并如实标注）。
+     * 理由：表格"描述"若由规则拼成自然语言，容易脱离原表语义（幻觉）；
+     * 而行列数 + 表头是<b>与原文网格强绑定</b>的可核事实，既给 embedding 结构信号，
+     * 又可被人工回查。跨页合并后的网格同样适用（取合并结果的表头）。
+     *
+     * @return 结构化摘要串；表格至少 1 行（构造器保证），故永不为 null
+     */
+    public @NonNull String toEmbeddingSummary() {
+        List<String> header = rows.get(0);
+        int cols = columnCount();
+        StringBuilder sb = new StringBuilder();
+        sb.append("表格（").append(rows.size()).append(" 行 ").append(cols).append(" 列）；");
+        // Markdown 口径：首行恒作表头渲染（与 toMarkdown 一致）；是否确为表头按标注如实标注。
+        sb.append(headerRowCount > 0 ? "表头：" : "首行（后端未标注表头）：");
+        boolean first = true;
+        for (String cell : header) {
+            if (!first) {
+                sb.append(' ');
+            }
+            sb.append(escape(cell));
+            first = false;
+        }
+        return sb.toString();
+    }
+
     private static void appendRow(StringBuilder sb, List<String> row, int cols) {
         sb.append("|");
         for (int c = 0; c < cols; c++) {

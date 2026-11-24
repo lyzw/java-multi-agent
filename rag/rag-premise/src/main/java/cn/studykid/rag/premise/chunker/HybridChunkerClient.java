@@ -212,17 +212,19 @@ public class HybridChunkerClient implements BlockChunker {
 
     private ChunkOutcome assemble(PremiseDocument document, ChunkPolicyConfig config,
                                   ChunkContext context, List<ChunkBridgeChunk> bridgeChunks) {
-        // ① item_ref → 解析块（PremiseBlock 持有原 LayoutBlock；ref 的数字尾 = texts 下标）
-        Map<Integer, cn.studykid.rag.ports.LayoutBlock> blockByIndex =
+        // ① item_ref → 解析块（P3-1：保留 PremiseBlock 本体而非仅解包 LayoutBlock——
+        //    FormulaAnnotation / TableGrid 挂在包装层，解包后 embedding 语义就丢了。
+        //    PremiseBlock 委托 LayoutBlock 的全部访问器，角色回填逻辑零改）。
+        Map<Integer, cn.studykid.rag.premise.model.PremiseBlock> blockByIndex =
                 new java.util.HashMap<>();
         int textsIdx = 0;
         for (var pb : document.blocks()) {
             // PremiseDocument 的 blocks 按阅读顺序遍历 texts/tables/pictures（与桥同源）；
             // 桥的 item_refs 目前只含 #/texts/N（实测 100%），故按下标对齐 texts 序列。
-            if (pb.toLayoutBlock().type() == cn.studykid.rag.ports.BlockType.HEADING) {
+            if (pb.type() == cn.studykid.rag.ports.BlockType.HEADING) {
                 // 标题块也在 texts 里（section_header/title 都占位）——保持计数一致
             }
-            blockByIndex.put(textsIdx++, pb.toLayoutBlock());
+            blockByIndex.put(textsIdx++, pb);
         }
 
         List<Chunk> chunks = new ArrayList<>();
@@ -257,7 +259,7 @@ public class HybridChunkerClient implements BlockChunker {
      * sectionPath 取 chunk headings 的标题栈语义（headings 已是层级序）。
      */
     private Chunk buildChunk(String documentId, ChunkContext context, ChunkBridgeChunk bc,
-                             Map<Integer, cn.studykid.rag.ports.LayoutBlock> blockByIndex) {
+                             Map<Integer, cn.studykid.rag.premise.model.PremiseBlock> blockByIndex) {
         String trimmed = bc.text().trim();
         ChunkRole role = resolveChunkRole(bc, blockByIndex);
         int page = bc.pages().isEmpty() ? 1 : bc.pages().get(0);
@@ -282,13 +284,18 @@ public class HybridChunkerClient implements BlockChunker {
      * @param charEnd   页内字符终点
      */
     private Chunk buildChunk(String documentId, ChunkContext context, ChunkBridgeChunk bc,
-                             Map<Integer, cn.studykid.rag.ports.LayoutBlock> blockByIndex,
+                             Map<Integer, cn.studykid.rag.premise.model.PremiseBlock> blockByIndex,
                              ChunkRole role, String rawText,
                              int page, int charStart, int charEnd) {
         String trimmed = rawText.trim();
         String sectionPath = String.join(SectionPathStack.SEPARATOR, bc.headings());
         Chunk.Locator locator = new Chunk.Locator(page, sectionPath,
                 effectiveExerciseNo(bc, blockByIndex), charStart, charEnd);
+        // ⚠️ P3-1：从 chunk 覆盖的 PremiseBlock 收集 embedding 语义。合并块可能覆盖
+        //    多个 block（含公式/表格）——逐一取、去重、按引用顺序拼接（确定性，可回取）。
+        //    不伪造：无公式标注/无表格网格的块返回 null，全无则槽位留空。
+        String formulaSemantics = collectSemantics(bc, blockByIndex, true);
+        String captionSummary = collectSemantics(bc, blockByIndex, false);
         return new Chunk(
                 ChunkIdentifiers.chunkId(documentId, page, charStart),
                 documentId,
@@ -302,7 +309,40 @@ public class HybridChunkerClient implements BlockChunker {
                 new LayoutFacts(
                         role.isAnswerBearing(),
                         "HYBRID_CHUNK",
-                        BlockRoleResolver.matchedSolutionPrefix(trimmed)));
+                        BlockRoleResolver.matchedSolutionPrefix(trimmed)),
+                null, Chunk.LEVEL_PARENT,
+                formulaSemantics, captionSummary);
+    }
+
+    /**
+     * 从 chunk 覆盖的 PremiseBlock 收集 embedding 语义（formula 或 table summary）。
+     *
+     * <p>⚠️ 去重且按 itemRefs 顺序拼接：合并 peer 时同一公式块可能被多个 chunk 引用，
+     * 但单个 chunk 内不会重复计同一块（引用去重）；顺序稳定保证摄取与重算同构。
+     *
+     * @param formula true 取公式 embeddingView，false 取表格摘要
+     * @return 拼接后的语义串；无任何来源返回 null（不伪造）
+     */
+    private String collectSemantics(ChunkBridgeChunk bc,
+                                    Map<Integer, cn.studykid.rag.premise.model.PremiseBlock> blockByIndex,
+                                    boolean formula) {
+        java.util.Set<String> collected = new java.util.LinkedHashSet<>();
+        for (String ref : bc.itemRefs()) {
+            var pb = blockByIndex(ref, blockByIndex);
+            if (pb == null) {
+                continue;
+            }
+            String value;
+            if (formula) {
+                value = pb.hasFormulaAnnotation() ? pb.formulaAnnotation().embeddingView() : null;
+            } else {
+                value = pb.hasTableGrid() ? pb.tableGrid().toEmbeddingSummary() : null;
+            }
+            if (value != null && !value.isBlank()) {
+                collected.add(value);
+            }
+        }
+        return collected.isEmpty() ? null : String.join("\n", collected);
     }
 
     /**
@@ -321,7 +361,7 @@ public class HybridChunkerClient implements BlockChunker {
      * （讲解模式过滤它），不可把答案判成讲解（泄题）。
      */
     private ChunkRole resolveChunkRole(ChunkBridgeChunk bc,
-                                       Map<Integer, cn.studykid.rag.ports.LayoutBlock> blockByIndex) {
+                                       Map<Integer, cn.studykid.rag.premise.model.PremiseBlock> blockByIndex) {
         boolean anyAnswerZone = false;
         boolean anyAnswerType = false;
         boolean anyExercise = false;
@@ -351,8 +391,8 @@ public class HybridChunkerClient implements BlockChunker {
         return byContent != null ? byContent : ChunkRole.EXPLANATION;
     }
 
-    private cn.studykid.rag.ports.LayoutBlock blockByIndex(
-            String ref, Map<Integer, cn.studykid.rag.ports.LayoutBlock> blockByIndex) {
+    private cn.studykid.rag.premise.model.PremiseBlock blockByIndex(
+            String ref, Map<Integer, cn.studykid.rag.premise.model.PremiseBlock> blockByIndex) {
         // ref 形如 #/texts/12 → 12
         int slash = ref.lastIndexOf('/');
         if (slash < 0) {
@@ -366,7 +406,7 @@ public class HybridChunkerClient implements BlockChunker {
     }
 
     private String effectiveExerciseNo(ChunkBridgeChunk bc,
-                                       Map<Integer, cn.studykid.rag.ports.LayoutBlock> blockByIndex) {
+                                       Map<Integer, cn.studykid.rag.premise.model.PremiseBlock> blockByIndex) {
         for (String ref : bc.itemRefs()) {
             var block = blockByIndex(ref, blockByIndex);
             if (block != null && block.exerciseNo() != null) {

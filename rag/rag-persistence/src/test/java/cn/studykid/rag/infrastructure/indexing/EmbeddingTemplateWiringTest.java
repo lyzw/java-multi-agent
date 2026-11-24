@@ -65,4 +65,20 @@ class EmbeddingTemplateWiringTest {
         assertTrue(sent.contains(bareText), "模板正文须保留原文");
         assertTrue(!sent.equals(bareText), "不能再把裸正文直接送 embedding");
     }
+
+    @Test
+    @DisplayName("P3-1 语义带过：扫描行的公式/摘要槽位必须进 embedding 文本（撤掉即红）")
+    void semanticsFlowIntoEmbeddingText() {
+        String text = cn.studykid.rag.core.embedding.EmbeddingInputTemplate.renderDocument(
+                new ChunkIndexer.PendingChunk(
+                        "c-2", "F = ma", "FORMULA", 5, "第3章", null, "FORMULA",
+                        "F = ma。牛顿第二定律", "表格（2 行 2 列）；表头：知识点 难度",
+                        "人教版", "八年级", "上册", "2024",
+                        List.of(), List.of()).toEmbeddingInput());
+
+        assertTrue(text.contains("牛顿第二定律"),
+                "公式语义槽位必须进 embedding 文本，实际=" + text);
+        assertTrue(text.contains("表头：知识点 难度"),
+                "表格摘要槽位必须进 embedding 文本，实际=" + text);
+    }
 }

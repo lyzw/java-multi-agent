@@ -150,7 +150,8 @@ public final class QuestionAnswerPairer {
             rewritten.add(new Chunk(
                     chunk.id(), chunk.documentId(), chunk.edition(), chunk.role(), chunk.text(),
                     chunk.locator(), chunk.knowledgePointIds(), ref, chunk.contentHash(),
-                    chunk.layoutFacts()));
+                    chunk.layoutFacts(), chunk.parentId(), chunk.chunkLevel(),
+                    chunk.formulaNaturalLanguage(), chunk.captionOrTableSummary()));
         }
         return List.copyOf(rewritten);
     }

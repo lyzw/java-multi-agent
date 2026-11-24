@@ -352,6 +352,8 @@ CREATE TABLE rag.rag_chunk (
     scope text DEFAULT 'TENANT'::text NOT NULL,
     parent_chunk_id uuid,
     chunk_level integer DEFAULT 0 NOT NULL,
+    formula_natural_language text,
+    caption_or_table_summary text,
     CONSTRAINT rag_chunk_char_range_chk CHECK ((char_end >= char_start)),
     CONSTRAINT rag_chunk_char_start_chk CHECK ((char_start >= 0)),
     CONSTRAINT rag_chunk_page_chk CHECK ((page_number >= 1)),

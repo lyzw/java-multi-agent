@@ -127,6 +127,7 @@ public class IndexGenerationBuilder {
     static final String SCAN_SQL = """
             SELECT c.chunk_id, c.text, c.role::text, c.page_number, c.section_path,
                    c.exercise_no, c.block_type,
+                   c.formula_natural_language, c.caption_or_table_summary,
                    COALESCE(ed.publisher, '') AS publisher, COALESCE(ed.grade, '') AS grade,
                    COALESCE(ed.term, '') AS term, COALESCE(ed.revision_code, '') AS revision_code,
                    COALESCE(kp.names, ARRAY[]::text[]) AS kp_names,
@@ -496,6 +497,8 @@ public class IndexGenerationBuilder {
                             rs.getString("role"), rs.getInt("page_number"),
                             rs.getString("section_path"), rs.getString("exercise_no"),
                             rs.getString("block_type"),
+                            rs.getString("formula_natural_language"),
+                            rs.getString("caption_or_table_summary"),
                             rs.getString("publisher"), rs.getString("grade"),
                             rs.getString("term"), rs.getString("revision_code"),
                             ChunkIndexer.readTextArray(rs, "kp_names"),
@@ -530,6 +533,8 @@ public class IndexGenerationBuilder {
                                @org.jspecify.annotations.Nullable String sectionPath,
                                @org.jspecify.annotations.Nullable String exerciseNo,
                                @org.jspecify.annotations.Nullable String blockType,
+                               @org.jspecify.annotations.Nullable String formulaNaturalLanguage,
+                               @org.jspecify.annotations.Nullable String captionOrTableSummary,
                                @NonNull String publisher, @NonNull String grade,
                                @NonNull String term, @NonNull String revisionCode,
                                @NonNull List<String> kpNames,
@@ -538,7 +543,20 @@ public class IndexGenerationBuilder {
         /** 兼容构造：仅用于测试夹具。 */
         public PendingChunk(@NonNull String chunkId, @NonNull String text) {
             this(chunkId, text, "EXPLANATION", 1, "", null, null,
-                    "", "", "", "", java.util.List.of(), java.util.List.of());
+                    null, null, "", "", "", "", java.util.List.of(), java.util.List.of());
+        }
+
+        /** 兼容构造：P3-1 之前的 13 参签名（无语义槽位），供既有测试夹具零改。 */
+        public PendingChunk(@NonNull String chunkId, @NonNull String text,
+                            @org.jspecify.annotations.Nullable String role, int pageNumber,
+                            @org.jspecify.annotations.Nullable String sectionPath,
+                            @org.jspecify.annotations.Nullable String exerciseNo,
+                            @org.jspecify.annotations.Nullable String blockType,
+                            @NonNull String publisher, @NonNull String grade,
+                            @NonNull String term, @NonNull String revisionCode,
+                            @NonNull List<String> kpNames, @NonNull List<String> kpAliases) {
+            this(chunkId, text, role, pageNumber, sectionPath, exerciseNo, blockType,
+                    null, null, publisher, grade, term, revisionCode, kpNames, kpAliases);
         }
 
         cn.studykid.rag.core.embedding.EmbeddingInput toEmbeddingInput() {
@@ -547,7 +565,7 @@ public class IndexGenerationBuilder {
                     term == null ? "" : term, revisionCode == null ? "" : revisionCode,
                     sectionPath == null ? "" : sectionPath, pageNumber,
                     exerciseNo, blockType, role == null ? "EXPLANATION" : role,
-                    text, kpNames, kpAliases);
+                    text, kpNames, kpAliases, formulaNaturalLanguage, captionOrTableSummary);
         }
     }
 }

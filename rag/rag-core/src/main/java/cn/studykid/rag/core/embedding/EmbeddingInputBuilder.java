@@ -37,9 +37,28 @@ public final class EmbeddingInputBuilder {
             @Nullable String exerciseNo, @Nullable String blockType, @NonNull String role,
             @NonNull String chunkText, @NonNull List<String> kpNames,
             @NonNull List<String> kpAliases) {
+        return fromScanRow(publisher, grade, term, revisionCode, sectionPath, pageNumber,
+                exerciseNo, blockType, role, chunkText, kpNames, kpAliases, null, null);
+    }
+
+    /**
+     * 全参构造（P3-1 语义槽位）：重索引扫描 SQL 读到公式/摘要两列后走本重载。
+     *
+     * <p>⚠️ 与首次摄取的 {@code EmbeddingInputFactory.fromChunk} 逐字同构：两侧都把
+     * 公式 embeddingView 放第 14 参、表格摘要放第 15 参。若一侧漏传（传 null），
+     * 同一片段重算会丢失语义槽位 → 向量漂移且无报错，由同构测试钉死。
+     */
+    public static @NonNull EmbeddingInput fromScanRow(
+            @NonNull String publisher, @NonNull String grade, @NonNull String term,
+            @NonNull String revisionCode, @NonNull String sectionPath, int pageNumber,
+            @Nullable String exerciseNo, @Nullable String blockType, @NonNull String role,
+            @NonNull String chunkText, @NonNull List<String> kpNames,
+            @NonNull List<String> kpAliases,
+            @Nullable String formulaNaturalLanguage,
+            @Nullable String captionOrTableSummary) {
         return new EmbeddingInput(
                 publisher, grade, term, revisionCode, sectionPath,
                 pageNumber, pageNumber, exerciseNo, blockType, role,
-                kpNames, kpAliases, chunkText, null, null);
+                kpNames, kpAliases, chunkText, formulaNaturalLanguage, captionOrTableSummary);
     }
 }

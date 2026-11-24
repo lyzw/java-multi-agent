@@ -1,5 +1,6 @@
 package cn.studykid.rag.application.ingest;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.util.List;
@@ -49,21 +50,50 @@ class EmbeddingInputIsomorphismTest {
                 new Chunk.Locator(20, "第3章 > 3.2 二次函数", "Q003", 0, 30),
                 // ⚠️ 故意让 kpIds 顺序与 canonicalName 排序**相反**（抛物线对称轴 > 二次函数顶点）：
                 //    若工厂不排序，模板文本就与重索引侧 SQL 的 ORDER BY 结果不同 → 本测试转红。
-                List.of("kp-2", "kp-1"), "Q003", "hash", null);
+                List.of("kp-2", "kp-1"), "Q003", "hash", null,
+                null, Chunk.LEVEL_PARENT,
+                "v = v_0 + at。匀变速直线运动速度时间公式，v 为末速度",
+                "表格（2 行 2 列）；表头：知识点 难度");
 
         String viaIngest = EmbeddingInputTemplate.renderDocument(
                 EmbeddingInputFactory.fromChunk(chunk, points()));
 
         // 重索引侧：模拟扫描 SQL 的扁平列（kp 已按 canonical_name 排序，别名同序）。
+        // ⚠️ 两语义槽位必须逐字带过——任一侧漏传都会让本断言转红（防向量漂移）。
         String viaRescan = EmbeddingInputTemplate.renderDocument(
                 EmbeddingInputBuilder.fromScanRow(
                         "人教版", "七年级", "上册", "2024", "第3章 > 3.2 二次函数",
                         20, "Q003", null, "EXERCISE", "求抛物线的顶点坐标。",
                         List.of("二次函数顶点", "抛物线对称轴"),
-                        List.of("顶点式", "轴对称性")));
+                        List.of("顶点式", "轴对称性"),
+                        "v = v_0 + at。匀变速直线运动速度时间公式，v 为末速度",
+                        "表格（2 行 2 列）；表头：知识点 难度"));
 
         assertEquals(viaIngest, viaRescan,
                 "摄取与重索引必须产生同一 embedding 输入，否则重算会向量漂移");
+    }
+
+    @Test
+    @DisplayName("撤点反证：重索引侧漏传语义槽位 → 文本必变（证明语义带过是承重的）")
+    void droppedSemanticsChangesText() {
+        Chunk chunk = new Chunk("c-1", "d-1", edition(), ChunkRole.EXERCISE,
+                "求抛物线的顶点坐标。",
+                new Chunk.Locator(20, "", "Q003", 0, 30),
+                List.of(), "Q003", "hash", null, null, Chunk.LEVEL_PARENT,
+                "F = ma。牛顿第二定律", null);
+
+        String viaIngest = EmbeddingInputTemplate.renderDocument(
+                EmbeddingInputFactory.fromChunk(chunk, points()));
+        // 模拟重索引漏读 formula 列（传 null）——这是要防的漂移事故。
+        String viaRescanDropped = EmbeddingInputTemplate.renderDocument(
+                EmbeddingInputBuilder.fromScanRow(
+                        "人教版", "七年级", "上册", "2024", "", 20, "Q003", null,
+                        "EXERCISE", "求抛物线的顶点坐标。", List.of(), List.of(),
+                        null, null));
+
+        org.junit.jupiter.api.Assertions.assertNotEquals(viaIngest, viaRescanDropped,
+                "若漏传语义槽位文本不变，说明槽位没真正进模板——反证失效");
+        assertThat(viaIngest).contains("牛顿第二定律");
     }
 
     @Test

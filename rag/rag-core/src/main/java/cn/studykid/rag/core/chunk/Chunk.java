@@ -63,7 +63,24 @@ public record Chunk(
          * <p>⚠️ 既有无父子概念的自然块默认 0（顶层）——它们本身就是按结构切出的
          * 完整语义单元，不因为新增字段而被降级成"孤儿子块"。
          */
-        int chunkLevel
+        int chunkLevel,
+        /**
+         * 公式的 embedding 语义视图（RAG-D28 P3-1 / P1-6，受控词典命中才有）。
+         *
+         * <p>⚠️ 取自 {@code FormulaAnnotation.embeddingView()}：命中时＝LaTeX + 人工审核的
+         * 自然语言 + 符号含义；未命中时只有规范化 LaTeX（fail-closed，不猜语义）。
+         * 为 null 表示本片段不是公式块（或切分路径无 PremiseBlock 语义）——
+         * 不伪造一个描述，模板渲染时该槽位留空。
+         */
+        @Nullable String formulaNaturalLanguage,
+        /**
+         * 图注/表格摘要的 embedding 文本（RAG-D28 P3-1）。
+         *
+         * <p>⚠️ 表格块由 {@code TableGrid} 的确定性结构摘要生成（行列数 + 表头），
+         * 与原文网格绑定，不生成自然语言；图片块当前无 VLM caption（P1-7 未落地），
+         * 留 null。为 null 表示无可用摘要，模板不编造。
+         */
+        @Nullable String captionOrTableSummary
 ) {
 
     /** 父块层级：上下文聚合，送 LLM 阅读与引用展示。 */
@@ -100,7 +117,25 @@ public record Chunk(
                  @NonNull List<String> knowledgePointIds, @Nullable String exerciseRef,
                  @NonNull String contentHash, @Nullable LayoutFacts layoutFacts) {
         this(id, documentId, edition, role, text, locator,
-                knowledgePointIds, exerciseRef, contentHash, layoutFacts, null, LEVEL_PARENT);
+                knowledgePointIds, exerciseRef, contentHash, layoutFacts, null, LEVEL_PARENT,
+                null, null);
+    }
+
+    /**
+     * 向后兼容构造（含版面事实与父子字段，无 embedding 语义槽位）。
+     *
+     * <p>⚠️ 铁律 #8：本构造保留给既有调用方；新增的公式/摘要槽位以 null 补齐，
+     * 表示"该路径不产语义"，由专门的全参构造逐字段带过。
+     */
+    public Chunk(@NonNull String id, @NonNull String documentId,
+                 @NonNull EditionCoordinate edition, @NonNull ChunkRole role,
+                 @NonNull String text, @NonNull Locator locator,
+                 @NonNull List<String> knowledgePointIds, @Nullable String exerciseRef,
+                 @NonNull String contentHash, @Nullable LayoutFacts layoutFacts,
+                 @Nullable String parentId, int chunkLevel) {
+        this(id, documentId, edition, role, text, locator,
+                knowledgePointIds, exerciseRef, contentHash, layoutFacts,
+                parentId, chunkLevel, null, null);
     }
 
     /** @return 是否为子块（有父块且层级为 1）。 */
@@ -117,7 +152,7 @@ public record Chunk(
     public @NonNull Chunk asChildOf(@NonNull String newParentId) {
         return new Chunk(id, documentId, edition, role, text, locator,
                 knowledgePointIds, exerciseRef, contentHash, layoutFacts,
-                newParentId, LEVEL_CHILD);
+                newParentId, LEVEL_CHILD, formulaNaturalLanguage, captionOrTableSummary);
     }
 
     public Chunk {

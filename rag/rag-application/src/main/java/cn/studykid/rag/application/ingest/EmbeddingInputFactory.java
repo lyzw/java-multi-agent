@@ -72,10 +72,10 @@ public final class EmbeddingInputFactory {
                 names,
                 aliases,
                 chunk.text(),
-                // ⚠️ 公式语义/图注尚未透传到 Chunk（诚实边界，见 D28 P3-1 收口说明）：
-                //    当前切分器不产这两列，传 null 让模板不编造描述；
-                //    P1-6 的 FormulaAnnotation.embeddingView() 留在 premise 层待后续接线。
-                null,
-                null);
+                // P3-1 语义槽位：切分器已从 PremiseBlock 采集并随 Chunk 带过——
+                //   公式走受控 embeddingView（未命中仅 LaTeX，禁自猜），
+                //   表格走确定性结构摘要；无来源则 null，模板不编造。
+                chunk.formulaNaturalLanguage(),
+                chunk.captionOrTableSummary());
     }
 }
