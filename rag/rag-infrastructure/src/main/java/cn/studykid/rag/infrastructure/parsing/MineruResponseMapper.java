@@ -13,6 +13,8 @@ import tools.jackson.databind.ObjectMapper;
 import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.LayoutBlock;
 import cn.studykid.rag.premise.model.PremiseBlock;
+import cn.studykid.rag.premise.normalize.FormulaAnnotation;
+import cn.studykid.rag.premise.normalize.FormulaEnricher;
 import cn.studykid.rag.premise.normalize.SectionPathStack;
 import cn.studykid.rag.premise.normalize.TableGrid;
 
@@ -235,9 +237,13 @@ public class MineruResponseMapper {
         int end = start + trimmed.length();
         LayoutBlock layout = new LayoutBlock(type, trimmed, page1, level, section,
                 LayoutPredicates.extractExerciseNo(trimmed), answerZone, start, end);
+        // ⚠️ P1-6：公式块走受控语义增强（与 Docling 同一份 FormulaEnricher/词典）。
+        //    原文含 LaTeX 时查表命中，否则 fail-closed 标待抽检（DEC-P3 禁自猜）。
+        FormulaAnnotation formula = type == BlockType.FORMULA
+                ? FormulaEnricher.getInstance().enrich(trimmed) : null;
         // ⚠️ P1-3：bbox 原样保留（MinerU 实测为 0-1 归一化四元组）；
         //    confidence 仅当后端真给字段才赋值——实测无此字段，保持 NaN（hasConfidence=false）。
-        return new PremiseBlock(layout, extractBbox(block), extractConfidence(block), tableGrid);
+        return new PremiseBlock(layout, extractBbox(block), extractConfidence(block), tableGrid, formula);
     }
 
     /**

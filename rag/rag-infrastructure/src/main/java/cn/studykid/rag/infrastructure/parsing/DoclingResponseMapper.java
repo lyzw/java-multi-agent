@@ -13,6 +13,8 @@ import tools.jackson.databind.ObjectMapper;
 import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.LayoutBlock;
 import cn.studykid.rag.premise.model.PremiseBlock;
+import cn.studykid.rag.premise.normalize.FormulaAnnotation;
+import cn.studykid.rag.premise.normalize.FormulaEnricher;
 import cn.studykid.rag.premise.normalize.SectionPathStack;
 import cn.studykid.rag.premise.normalize.TableGrid;
 
@@ -294,9 +296,13 @@ public class DoclingResponseMapper {
 
         LayoutBlock layout = new LayoutBlock(type, trimmed, page, level, section,
                 extractExerciseNo(trimmed), answerZone, start, end);
+        // ⚠️ P1-6：公式块走受控语义增强。原文不是 LaTeX（Docling 实测 orig 常是题干文字）
+        //    时 FormulaEnricher fail-closed 标为待抽检，自然语言留空（DEC-P3 禁自猜）。
+        FormulaAnnotation formula = type == BlockType.FORMULA
+                ? FormulaEnricher.getInstance().enrich(trimmed) : null;
         // ⚠️ P1-3：bbox 来自 prov[0].bbox{l,t,r,b}，转成 [l,t,r,b]（原样 pt 坐标）。
         //    confidence 原始响应无此字段 → NaN（⛔ 不伪造），用 hasConfidence() 判定未知。
-        return new PremiseBlock(layout, extractBbox(prov), Double.NaN, tableGrid);
+        return new PremiseBlock(layout, extractBbox(prov), Double.NaN, tableGrid, formula);
     }
 
     /**

@@ -25,6 +25,24 @@ class NormalizationRulesTest {
                 charStart, charStart + text.length()));
     }
 
+    // ---------- P1-6：归一化逐字段带过公式标注（铁律 #8） ----------
+
+    @Test
+    @DisplayName("normalize 三处重建逐字段带过 formulaAnnotation，不静默清空")
+    void normalizeKeepsFormulaAnnotation() {
+        FormulaAnnotation fa = FormulaEnricher.getInstance().enrich("F = ma");
+        // 非法区间（charEnd < charStart）触发 rebuildWithSpan 重建——这是铁律 #8 的承重路径
+        PremiseBlock formulaBlock = PremiseBlock.fromLayoutBlock(new LayoutBlock(
+                BlockType.FORMULA, "F = ma", 1, 0, "", null, false, 8, 2))
+                .withFormula(fa);
+        List<PremiseBlock> out = NormalizationRules.normalize(List.of(formulaBlock), true, false);
+        assertThat(out).hasSize(1);
+        assertThat(out.get(0).charStart()).as("区间确实被重建了").isZero();
+        assertThat(out.get(0).hasFormulaAnnotation()).isTrue();
+        assertThat(out.get(0).formulaAnnotation().naturalLanguage())
+                .contains("牛顿第二定律");
+    }
+
     // ---------- 唯一入口（P1-4） ----------
 
     @Test

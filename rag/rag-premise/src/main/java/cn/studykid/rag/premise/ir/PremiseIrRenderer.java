@@ -8,6 +8,7 @@ import org.jspecify.annotations.NonNull;
 import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.premise.model.PremiseBlock;
 import cn.studykid.rag.premise.model.PremiseDocument;
+import cn.studykid.rag.premise.normalize.FormulaAnnotation;
 
 /**
  * P1-3（RAG-D28）：把 {@link PremiseDocument} 渲染为 D27 §4.2 中间产物（Markdown + JSON）。
@@ -68,6 +69,7 @@ public final class PremiseIrRenderer {
             json.append(", \"sectionPath\": ").append(quote(b.sectionPath()));
             json.append(", \"exerciseNo\": ").append(exerciseJson(b));
             json.append(", \"inAnswerZone\": ").append(b.inAnswerZone());
+            json.append(", \"formula\": ").append(formulaJson(b));
             json.append('}');
         }
         json.append("\n  ]\n}");
@@ -107,7 +109,15 @@ public final class PremiseIrRenderer {
                 int level = Math.max(1, Math.min(6, b.headingLevel()));
                 md.append("#".repeat(level)).append(' ').append(b.text()).append("\n\n");
             }
-            case FORMULA -> md.append("$$").append(b.text()).append("$$\n\n");
+            case FORMULA -> {
+                md.append("$$").append(b.text()).append("$$");
+                // P1-6：命中受控词典时追加自然语言描述（语义双写，D27 §4.4）。
+                // ⚠️ 未命中不追加——禁把无依据描述写进正文/向量（DEC-P3）。
+                if (b.hasFormulaAnnotation() && b.formulaAnnotation().hasNaturalLanguage()) {
+                    md.append('\n').append(b.formulaAnnotation().naturalLanguage());
+                }
+                md.append("\n\n");
+            }
             case LIST_ITEM -> md.append("- ").append(b.text()).append('\n');
             case TABLE, FIGURE -> md.append(b.text()).append("\n\n"); // 保留占位，详细结构在 JSON
             default -> md.append(b.text()).append("\n\n");
@@ -129,6 +139,36 @@ public final class PremiseIrRenderer {
     private static String exerciseJson(PremiseBlock b) {
         String no = b.exerciseNo();
         return no == null ? "null" : quote(no);
+    }
+
+    /**
+     * P1-6：公式语义标注 JSON。非公式块 / 未注解输出 {@code null}（不伪造空对象）。
+     *
+     * <p>⚠️ 自然语言未命中时为 JSON null，不写空串也不写猜测值——
+     * 让「待抽检」状态在中间产物里一眼可见（DEC-P3 诚实标注）。
+     */
+    private static String formulaJson(PremiseBlock b) {
+        if (!b.hasFormulaAnnotation()) {
+            return "null";
+        }
+        FormulaAnnotation f = b.formulaAnnotation();
+        StringBuilder sb = new StringBuilder("{");
+        sb.append("\"latex\": ").append(quote(f.latex()));
+        sb.append(", \"naturalLanguage\": ")
+                .append(f.hasNaturalLanguage() ? quote(f.naturalLanguage()) : "null");
+        sb.append(", \"catalogueHit\": ").append(f.catalogueHit());
+        sb.append(", \"needsReview\": ").append(f.needsReview());
+        sb.append(", \"symbols\": {");
+        boolean first = true;
+        for (var e : f.symbols().entrySet()) {
+            if (!first) {
+                sb.append(',');
+            }
+            sb.append(quote(e.getKey())).append(": ").append(quote(e.getValue()));
+            first = false;
+        }
+        sb.append("}}");
+        return sb.toString();
     }
 
     /** 严格 JSON 字符串转义（控制符/引号/反斜杠），防止正文中的特殊字符破坏结构。 */

@@ -234,7 +234,7 @@ public final class NormalizationRules {
         LayoutBlock moved = new LayoutBlock(raw.type(), raw.text(), newPage, raw.headingLevel(),
                 raw.sectionPath(), raw.exerciseNo(), raw.inAnswerZone(),
                 raw.charStart(), raw.charEnd());
-        return new PremiseBlock(moved, b.pageBbox(), b.confidence(), b.tableGrid());
+        return new PremiseBlock(moved, b.pageBbox(), b.confidence(), b.tableGrid(), b.formulaAnnotation());
     }
 
     private static PremiseBlock withType(PremiseBlock b, BlockType newType) {
@@ -242,7 +242,7 @@ public final class NormalizationRules {
         LayoutBlock tagged = new LayoutBlock(newType, raw.text(), raw.pageNumber(),
                 raw.headingLevel(), raw.sectionPath(), raw.exerciseNo(), raw.inAnswerZone(),
                 raw.charStart(), raw.charEnd());
-        return new PremiseBlock(tagged, b.pageBbox(), b.confidence(), b.tableGrid());
+        return new PremiseBlock(tagged, b.pageBbox(), b.confidence(), b.tableGrid(), b.formulaAnnotation());
     }
 
     private static PremiseBlock rebuildWithSpan(PremiseBlock b, int charStart, int charEnd) {
@@ -250,6 +250,6 @@ public final class NormalizationRules {
         LayoutBlock respanned = new LayoutBlock(raw.type(), raw.text(), raw.pageNumber(),
                 raw.headingLevel(), raw.sectionPath(), raw.exerciseNo(), raw.inAnswerZone(),
                 charStart, charEnd);
-        return new PremiseBlock(respanned, b.pageBbox(), b.confidence(), b.tableGrid());
+        return new PremiseBlock(respanned, b.pageBbox(), b.confidence(), b.tableGrid(), b.formulaAnnotation());
     }
 }

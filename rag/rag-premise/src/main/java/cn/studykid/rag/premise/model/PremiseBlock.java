@@ -6,6 +6,7 @@ import org.jspecify.annotations.NonNull;
 
 import cn.studykid.rag.ports.BlockType;
 import cn.studykid.rag.ports.LayoutBlock;
+import cn.studykid.rag.premise.normalize.FormulaAnnotation;
 import cn.studykid.rag.premise.normalize.TableGrid;
 
 /**
@@ -41,6 +42,8 @@ public final class PremiseBlock {
     private final double confidence;
     /** P1-5：表格块的结构化网格（非表格块为 null）。跨页合并/表头继承的数据源。 */
     private final TableGrid tableGrid;
+    /** P1-6：公式块的受控语义标注（非公式块为 null）。语义双写/词法别名数据源。 */
+    private final FormulaAnnotation formulaAnnotation;
 
     /**
      * 3 参 compat 构造（既有调用方零改；表格网格为 null）。
@@ -50,7 +53,7 @@ public final class PremiseBlock {
      * @param confidence 后端置信度（未知传 {@link Double#NaN}）
      */
     public PremiseBlock(@NonNull LayoutBlock layout, double[] pageBbox, double confidence) {
-        this(layout, pageBbox, confidence, null);
+        this(layout, pageBbox, confidence, null, null);
     }
 
     /**
@@ -66,6 +69,23 @@ public final class PremiseBlock {
      */
     public PremiseBlock(@NonNull LayoutBlock layout, double[] pageBbox, double confidence,
                         TableGrid tableGrid) {
+        this(layout, pageBbox, confidence, tableGrid, null);
+    }
+
+    /**
+     * 5 参全参构造（P1-6）：公式块由 mapper 传入受控语义标注。
+     *
+     * <p>⚠️ 铁律 #8：compat 构造新增字段后，所有转换路径必须<b>逐字段带过</b>，
+     * 否则归一化重排时公式标注被静默清空 → 语义双写空转。
+     *
+     * @param layout            被包装的既有版面块
+     * @param pageBbox          页内几何框（可为 null）
+     * @param confidence        后端置信度
+     * @param tableGrid         表格网格（仅 TABLE 块有值）
+     * @param formulaAnnotation 公式语义标注（仅 FORMULA 块有值）
+     */
+    public PremiseBlock(@NonNull LayoutBlock layout, double[] pageBbox, double confidence,
+                        TableGrid tableGrid, FormulaAnnotation formulaAnnotation) {
         if (layout == null) {
             throw new IllegalArgumentException("layout 不能为空");
         }
@@ -77,6 +97,7 @@ public final class PremiseBlock {
         this.pageBbox = pageBbox == null ? null : pageBbox.clone();
         this.confidence = confidence;
         this.tableGrid = tableGrid;
+        this.formulaAnnotation = formulaAnnotation;
     }
 
     /**
@@ -179,16 +200,36 @@ public final class PremiseBlock {
         return tableGrid != null;
     }
 
+    /** @return 公式语义标注（非公式块或结构缺失为 null） */
+    public FormulaAnnotation formulaAnnotation() {
+        return formulaAnnotation;
+    }
+
+    /** @return 是否为携带语义标注的公式块 */
+    public boolean hasFormulaAnnotation() {
+        return formulaAnnotation != null;
+    }
+
     /**
      * 用新的 LayoutBlock + 表格网格重建本块（P1-5 跨页合并/切片后产出新块用）。
      *
-     * <p>⚠️ 铁律 #8：几何/置信度/网格<b>全部逐字段带过</b>，不静默清空。
+     * <p>⚠️ 铁律 #8：几何/置信度/网格/公式标注<b>全部逐字段带过</b>，不静默清空。
      *
      * @param newLayout  新的版面块（text/char 区间已按合并结果重算）
      * @param newGrid    新的表格网格（切片后为该片的网格）
      * @return 重建的块
      */
     public @NonNull PremiseBlock withTable(@NonNull LayoutBlock newLayout, TableGrid newGrid) {
-        return new PremiseBlock(newLayout, pageBbox, confidence, newGrid);
+        return new PremiseBlock(newLayout, pageBbox, confidence, newGrid, formulaAnnotation);
+    }
+
+    /**
+     * 用带公式语义标注的块替换（P1-6 mapper 产出公式块时用）。
+     *
+     * @param formulaAnnotation 受控语义标注
+     * @return 重建的块
+     */
+    public @NonNull PremiseBlock withFormula(@NonNull FormulaAnnotation formulaAnnotation) {
+        return new PremiseBlock(layout, pageBbox, confidence, tableGrid, formulaAnnotation);
     }
 }

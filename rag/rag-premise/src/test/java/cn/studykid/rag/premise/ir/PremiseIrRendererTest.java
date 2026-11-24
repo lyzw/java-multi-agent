@@ -16,6 +16,8 @@ import cn.studykid.rag.ports.LayoutBlock;
 import cn.studykid.rag.premise.model.ParseTrace;
 import cn.studykid.rag.premise.model.PremiseBlock;
 import cn.studykid.rag.premise.model.PremiseDocument;
+import cn.studykid.rag.premise.normalize.FormulaAnnotation;
+import cn.studykid.rag.premise.normalize.FormulaEnricher;
 
 /**
  * P1-3（RAG-D28）IR 中间产物测试：Markdown/JSON 同源、bbox 不伪造、可回取原文 20/20。
@@ -110,6 +112,41 @@ class PremiseIrRendererTest {
         IntermediateRepresentation ir = renderer.render(doc(List.of(bad)));
         assertThrows(IllegalStateException.class, () -> renderer.retrieveOriginal(ir),
                 "越界区间必须转红，不得静默返回空串");
+    }
+
+    @Test
+    @DisplayName("P1-6 命中公式：Markdown 语义双写 + JSON 输出受控描述/符号")
+    void formulaMappedDoubleWrite() {
+        FormulaAnnotation fa = FormulaEnricher.getInstance().enrich("v = v_0 + at");
+        PremiseBlock fb = block(BlockType.FORMULA, "v = v_0 + at", 1, 0,
+                null, Double.NaN, 0, 12).withFormula(fa);
+        IntermediateRepresentation ir = renderer.render(doc(List.of(fb)));
+        assertTrue(ir.markdown().contains("$$v = v_0 + at$$"), "LaTeX 定界保留");
+        assertTrue(ir.markdown().contains("匀变速直线运动速度时间公式"), "Markdown 追加受控自然语言");
+        assertTrue(ir.json().contains("\"catalogueHit\": true"));
+        assertTrue(ir.json().contains("\"needsReview\": false"));
+        assertTrue(ir.json().contains("匀变速直线运动速度时间公式"), "JSON 输出自然语言");
+        assertTrue(ir.json().contains("\"v\": \"末速度\""), "JSON 输出符号含义");
+    }
+
+    @Test
+    @DisplayName("P1-6 未命中公式：JSON naturalLanguage=null、needsReview=true（不伪造）")
+    void formulaUnmappedHonest() {
+        FormulaAnnotation fa = FormulaEnricher.getInstance().enrich("v = v_0 + bt");
+        PremiseBlock fb = block(BlockType.FORMULA, "v = v_0 + bt", 1, 0,
+                null, Double.NaN, 0, 12).withFormula(fa);
+        IntermediateRepresentation ir = renderer.render(doc(List.of(fb)));
+        assertFalse(ir.markdown().contains("速度时间公式"), "未命中不得追加描述");
+        assertTrue(ir.json().contains("\"naturalLanguage\": null"), "未命中自然语言为 null");
+        assertTrue(ir.json().contains("\"needsReview\": true"), "未命中送人工抽检");
+    }
+
+    @Test
+    @DisplayName("P1-6 非公式块 formula=null（不伪造公式对象）")
+    void nonFormulaHasNoFormulaJson() {
+        PremiseBlock pb = block(BlockType.PARAGRAPH, "正文", 1, 0, null, Double.NaN, 0, 2);
+        String json = renderer.render(doc(List.of(pb))).json();
+        assertTrue(json.contains("\"formula\": null"), "非公式块输出 null");
     }
 
     @Test
