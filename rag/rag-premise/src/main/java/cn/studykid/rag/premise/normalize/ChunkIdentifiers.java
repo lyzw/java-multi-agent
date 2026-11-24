@@ -45,6 +45,25 @@ public final class ChunkIdentifiers {
     }
 
     /**
+     * 父块 ID 派生（RAG-D28 P2-1）：按 {@code documentId + sectionPath} 确定性生成。
+     *
+     * <p>⚠️ 前缀 {@code parent:} 与既有 {@link #chunkId} 的 {@code chunk:} 隔离——
+     * 父块与子块走不同键空间，绝不碰撞；同一小节重复摄取得到同一个父块 ID
+     * （upsert 依赖确定性）。本方法是<b>新增</b>格式，不改动上面两个既有格式的契约。
+     *
+     * @param documentId  文档 ID
+     * @param sectionPath 小节路径（父块的语义单元键）
+     * @return 确定性 UUID 串
+     */
+    public static @NonNull String parentChunkId(@NonNull String documentId,
+                                                 @NonNull String sectionPath) {
+        return java.util.UUID.nameUUIDFromBytes(
+                        ("parent:" + documentId + ":" + sectionPath)
+                                .getBytes(StandardCharsets.UTF_8))
+                .toString();
+    }
+
+    /**
      * 片段文本的 SHA-256 指纹（小写十六进制，与既有管道等价）。
      *
      * @param text 片段文本

@@ -18,6 +18,7 @@ import cn.studykid.rag.premise.model.ChunkPolicyConfig;
 import cn.studykid.rag.premise.model.ChunkTrace;
 import cn.studykid.rag.premise.model.PremiseBlock;
 import cn.studykid.rag.premise.model.PremiseDocument;
+import cn.studykid.rag.premise.normalize.AppendixLogicalUnitResolver;
 import cn.studykid.rag.premise.normalize.ChunkIdentifiers;
 import cn.studykid.rag.premise.normalize.SectionPathStack;
 import cn.studykid.rag.premise.normalize.SectionPathResolver;
@@ -50,6 +51,25 @@ public class HeadingHierarchyChunker implements cn.studykid.rag.premise.spi.Bloc
     /** 拆分时的字符/token 换算比（保守值 1.0，见类注释的口径说明）。 */
     static final double CHARS_PER_TOKEN = 1.0;
 
+    /**
+     * 附录逻辑单位接线器（RAG-D28 P2-4）。
+     *
+     * <p>⚠️ 默认 {@code null}（不启用）——parity 测试逐字段锁定既有切分产物，
+     * 生产接线时显式注入 {@link AppendixLogicalUnitResolver} 才开启 A-1/A-2/A-3。
+     * 与 P1 页级路由灰度开关同口径：能力存在但未接线前不宣称生产生效。
+     */
+    private final AppendixLogicalUnitResolver appendixResolver;
+
+    /** 默认构造（不启用附录逻辑单位，保持既有行为）。 */
+    public HeadingHierarchyChunker() {
+        this(null);
+    }
+
+    /** 注入附录逻辑单位接线器（生产接线点）。 */
+    public HeadingHierarchyChunker(AppendixLogicalUnitResolver appendixResolver) {
+        this.appendixResolver = appendixResolver;
+    }
+
     @Override
     public @NonNull ChunkPolicy policy() {
         return ChunkPolicy.HEADING_HIERARCHY;
@@ -60,13 +80,17 @@ public class HeadingHierarchyChunker implements cn.studykid.rag.premise.spi.Bloc
                                        @NonNull ChunkPolicyConfig config,
                                        @NonNull ChunkContext context) {
         String documentId = document.documentId();
+        // P2-4：附录段按 Unit 逻辑单位重写（A-1/A-2/A-3）；未注入时原样处理。
+        List<PremiseBlock> effectiveBlocks = appendixResolver == null
+                ? document.blocks()
+                : appendixResolver.resolve(document.blocks());
         List<Chunk> chunks = new ArrayList<>();
         SectionPathStack sectionPath = SectionPathResolver.newStack();
         String currentExerciseNo = null;
         int droppedNoise = 0;
         int splitOversize = 0;
 
-        for (PremiseBlock premiseBlock : document.blocks()) {
+        for (PremiseBlock premiseBlock : effectiveBlocks) {
             // PremiseBlock 是 LayoutBlock 的恒等包装：判定规则直接消费被包装块，
             // 与既有管道走同一条代码路径（role/BlockRoleResolver）。
             LayoutBlock block = premiseBlock.toLayoutBlock();
@@ -131,7 +155,7 @@ public class HeadingHierarchyChunker implements cn.studykid.rag.premise.spi.Bloc
         }
 
         ChunkTrace trace = new ChunkTrace(ChunkPolicy.HEADING_HIERARCHY, config.stableString(),
-                document.blocks().size(), chunks.size(), droppedNoise, splitOversize);
+                effectiveBlocks.size(), chunks.size(), droppedNoise, splitOversize);
         return new ChunkOutcome(documentId, ChunkPolicy.HEADING_HIERARCHY, config, chunks, trace);
     }
 
@@ -215,13 +239,20 @@ public class HeadingHierarchyChunker implements cn.studykid.rag.premise.spi.Bloc
                 break;
             }
         }
-        // 碎尾片并入前片（尾片 < window/2 时）：扩前片的文本与 end，不产生孤立短片
+        // 碎尾片并入前片（尾片 < window/2 时）：扩前片的文本与 end，不产生孤立短片。
+        // ⚠️ P2-6：合并文本必须按重叠区去重，且合并后不得超过 window——
+        //    旧实现直接 prev.text()+last.text() 把重叠区重复拼接，既产生重复正文，
+        //    又把本已超预算的块重新拼回超长片（680 字拆两片后又合成 ~1115 字），
+        //    拆分等于没做。重叠长度 = prev.end - last.start（滑窗 step < window 必然重叠）。
         if (parts.size() >= 2) {
             ChunkPiece last = parts.get(parts.size() - 1);
-            if (last.text().length() < window / 2) {
-                ChunkPiece prev = parts.get(parts.size() - 2);
+            ChunkPiece prev = parts.get(parts.size() - 2);
+            int overlap = Math.max(0, prev.end() - last.start());
+            String merged = prev.text()
+                    + last.text().substring(Math.min(overlap, last.text().length()));
+            if (last.text().length() < window / 2 && merged.length() <= window) {
                 parts.set(parts.size() - 2,
-                        new ChunkPiece(prev.text() + last.text(), prev.start(), last.end()));
+                        new ChunkPiece(merged, prev.start(), last.end()));
                 parts.remove(parts.size() - 1);
             }
         }

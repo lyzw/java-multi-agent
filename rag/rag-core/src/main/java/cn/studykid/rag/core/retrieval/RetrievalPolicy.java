@@ -1,6 +1,7 @@
 package cn.studykid.rag.core.retrieval;
 
 import java.util.List;
+import java.util.Map;
 
 import org.jspecify.annotations.NonNull;
 
@@ -131,6 +132,56 @@ public final class RetrievalPolicy {
         List<Chunk> merged = new java.util.ArrayList<>(chunks);
         merged.addAll(additions);
         return List.copyOf(merged);
+    }
+
+    /**
+     * 父块回带（RAG-D28 P2-1）：检索命中子块后返回其父块送 LLM 阅读。
+     *
+     * <p><b>⚠️ 两道安全闸门，缺一即泄题或失真</b>：
+     * <ol>
+     *   <li><b>父块角色过滤</b>：回带的父块先过 {@link #applyRoleFilter}——父块若被
+     *       上游误装配成答案承载角色（如把答案子块拼进了父块），讲解模式必须挡住；
+     *       <b>回带不是绕过泄题闸门的旁路</b>。</li>
+     *   <li><b>去重与保序</b>：同一父块被子块多次命中只回带一次，且保持子块在前、
+     *       父块随后（引用顺序稳定，LLM 输出可解释）。</li>
+     * </ol>
+     *
+     * <p>找不到父块的子块（孤儿，如 M4 迁移期只有子块没有父块）保持原样保留，
+     * 不静默丢弃命中结果。
+     *
+     * @param hits    已命中片段（含子块）
+     * @param pool    段落全集（含父块，供按 ID 查找）
+     * @param mode    检索模式（父块角色过滤用）
+     * @return 回带父块后的片段列表
+     */
+    public static @NonNull List<Chunk> expandParents(@NonNull List<Chunk> hits,
+                                                      @NonNull List<Chunk> pool,
+                                                      @NonNull RetrievalMode mode) {
+        Map<String, Chunk> byId = new java.util.LinkedHashMap<>();
+        for (Chunk c : pool) {
+            byId.putIfAbsent(c.id(), c);
+        }
+        List<Chunk> expanded = new java.util.ArrayList<>(hits);
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+        for (Chunk c : hits) {
+            seen.add(c.id());
+        }
+        for (Chunk c : hits) {
+            if (!c.isChild() || c.parentId() == null) {
+                continue;
+            }
+            Chunk parent = byId.get(c.parentId());
+            if (parent == null || seen.contains(parent.id())) {
+                continue;
+            }
+            // 父块必须过同一道泄题闸门——回带绝不绕过角色过滤。
+            if (!allowsRole(parent.role(), mode)) {
+                continue;
+            }
+            expanded.add(parent);
+            seen.add(parent.id());
+        }
+        return List.copyOf(expanded);
     }
 
     /**

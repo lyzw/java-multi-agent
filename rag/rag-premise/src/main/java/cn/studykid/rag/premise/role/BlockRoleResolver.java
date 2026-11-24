@@ -33,6 +33,8 @@ import cn.studykid.rag.ports.LayoutBlock;
  *   <tr><td>块类型 ANSWER</td><td>{@code EXERCISE_ANSWER}（行 4，取严）</td></tr>
  *   <tr><td>块首确定性前缀（解：/ 解答：/ 答：/ 答案：/ Key:/ Answer:）且不在答案区</td>
  *       <td>{@code EXERCISE_ANSWER}/{@code EXAMPLE_SOLUTION}（行 7，学生用书无答案附录补丁）</td></tr>
+ *   <tr><td>块首提示引导语（提示：/ 思路点拨：/ Hint: 等）且<b>不含任何解答引导语</b></td>
+ *       <td>{@code EXERCISE_HINT}（P2-5：稳定来源判定，无来源不编造）</td></tr>
  *   <tr><td>其余</td><td>{@code EXPLANATION}（行 6）</td></tr>
  * </table>
  *
@@ -105,6 +107,12 @@ public final class BlockRoleResolver {
                 if (contentRole != null) {
                     return contentRole;
                 }
+                // ④'' 提示角色（P2-5）：稳定来源判定，夹带答案已在方法内取严。
+                //     ⚠️ 顺序在解答前缀之后——解答前缀优先，绝不让 HINT 掩盖答案。
+                ChunkRole hintRole = resolveHintByContent(block.text(), effectiveExerciseNo);
+                if (hintRole != null) {
+                    return hintRole;
+                }
                 return ChunkRole.EXPLANATION;
         }
     }
@@ -145,6 +153,57 @@ public final class BlockRoleResolver {
         }
         var m = SOLUTION_PREFIX.matcher(text);
         return m.find() ? m.group().trim() : null;
+    }
+
+    /**
+     * 提示引导语前缀（RAG-D28 P2-5：{@code EXERCISE_HINT} 的<b>稳定来源</b>）。
+     *
+     * <p>⚠️ 只认<b>块首确定性标记</b>，绝不扫全文关键词——与
+     * {@link #SOLUTION_PREFIX} 同一纪律：全文出现"提示"二字（如正文里的
+     * 「本题提示了判别式用法」）不代表这个块是提示角色。
+     *
+     * <p>⚠️ 无稳定来源时<b>不编造</b>：普通段落（哪怕带题号、哪怕讲思路）
+     * 一律回落 {@code EXPLANATION}，不推断成 HINT。
+     */
+    private static final Pattern HINT_PREFIX = Pattern.compile(
+            "^\\s*(?:提示|思路点拨|思路引导|解题提示|想一想|Hint|Hints|Tips?)\\s*[:：]");
+
+    /**
+     * 解答引导语（任意位置，去掉块首锚定）——用于提示块夹带结果的取严判定。
+     *
+     * <p>⚠️ 与 {@link #SOLUTION_PREFIX} 同源：两者共用同一份前缀词表，
+     * 只在锚定上不同（块首判定 vs 任意位置夹带检测），避免两处词表漂移。
+     * 该正则在静态字段声明顺序上位于 {@link #SOLUTION_PREFIX} 之后（铁律 #20）。
+     */
+    private static final Pattern SOLUTION_ANYWHERE = Pattern.compile(
+            "(?:解|解答|解之|答|答案|答曰|求解结果|Key|Answer|Answers?)\\s*[:：]"
+                    + "|(?:Answer\\s+Key|Answers?\\s+to|Answer\\s+Sheet|参考答案|答案与解析|练习答案|习题答案|答案)");
+
+    /**
+     * 提示角色判定（P2-5）。
+     *
+     * <p><b>⚠️ 取严顺序（本方法的安全核心）</b>：
+     * <ol>
+     *   <li>无块首提示引导语 → 返回 null（不编造，交回 EXPLANATION）；</li>
+     *   <li>有提示引导语但文本含<b>任意</b>解答引导语（不限于块首）→ 取严为答案承载角色
+     *       ——「提示：… 解：x=2」这种混合块若判成 HINT，答案会随提示在讲解模式被召回（泄题）；</li>
+     *   <li>纯提示（给方向不给结果）→ {@code EXERCISE_HINT}。</li>
+     * </ol>
+     *
+     * @param text                块文本
+     * @param effectiveExerciseNo 有效题号（决定取严时归习题答案还是例题解答）
+     * @return HINT/答案类角色；无稳定来源返回 null
+     */
+    public static ChunkRole resolveHintByContent(String text, String effectiveExerciseNo) {
+        if (text == null || text.isBlank() || !HINT_PREFIX.matcher(text).find()) {
+            return null;
+        }
+        // 解答引导语出现在任意位置都取严——提示块不得夹带结果。
+        if (SOLUTION_ANYWHERE.matcher(text).find()) {
+            return effectiveExerciseNo != null
+                    ? ChunkRole.EXERCISE_ANSWER : ChunkRole.EXAMPLE_SOLUTION;
+        }
+        return ChunkRole.EXERCISE_HINT;
     }
 
     /**

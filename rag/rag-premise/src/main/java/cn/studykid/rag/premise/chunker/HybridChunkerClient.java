@@ -228,10 +228,20 @@ public class HybridChunkerClient implements BlockChunker {
         List<Chunk> chunks = new ArrayList<>();
         int splitOversize = 0;
         for (ChunkBridgeChunk bc : bridgeChunks) {
-            if (bc.text().length() > config.maxTokens()) {
+            // ⚠️ 角色先回填再决定是否拆分：答案承载块整块保留（与 HEADING_HIERARCHY 同口径，
+            //    拆散会破坏「答案-题号」版面对应）；非答案超长块才实际拆分。
+            ChunkRole role = resolveChunkRole(bc, blockByIndex);
+            if (bc.text().length() > config.maxTokens() && !role.isAnswerBearing()) {
                 splitOversize++;
+                int page = bc.pages().isEmpty() ? 1 : bc.pages().get(0);
+                int baseStart = bc.charStart() >= 0 ? bc.charStart() : 0;
+                for (ChunkPiece piece : HeadingHierarchyChunker.splitWithOverlap(bc.text(), config)) {
+                    chunks.add(buildChunk(document.documentId(), context, bc, blockByIndex,
+                            role, piece.text(), page, baseStart + piece.start(), baseStart + piece.end()));
+                }
+            } else {
+                chunks.add(buildChunk(document.documentId(), context, bc, blockByIndex));
             }
-            chunks.add(buildChunk(document.documentId(), context, bc, blockByIndex));
         }
         ChunkTrace trace = new ChunkTrace(ChunkPolicy.HYBRID_CHUNKER, config.stableString(),
                 document.blocks().size(), chunks.size(), 0, splitOversize);
@@ -253,6 +263,29 @@ public class HybridChunkerClient implements BlockChunker {
         int page = bc.pages().isEmpty() ? 1 : bc.pages().get(0);
         int charStart = bc.charStart() >= 0 ? bc.charStart() : 0;
         int charEnd = bc.charEnd() > charStart ? bc.charEnd() : charStart + trimmed.length();
+        return buildChunk(documentId, context, bc, blockByIndex, role, trimmed,
+                page, charStart, charEnd);
+    }
+
+    /**
+     * 构建单个 chunk（角色回填 + 真实 matchedPrefix 采集 + locator 可回取）。
+     *
+     * <p>⚠️ {@code matchedPrefix} 第三参此前是恒 null 的伪采集
+     * （{@code solutionPrefixPattern().isEmpty() ? null : null}）——判定用同一份规则
+     * 却记录一个假值，校对页永远显示"无判定依据"。P2-6 改为
+     * {@link BlockRoleResolver#matchedSolutionPrefix} 的真实返回值（铁律：判定与记录同源）。
+     *
+     * @param role      已回填的角色（拆分片沿用整块最严角色）
+     * @param rawText   片文本（整块时为 bc.text().trim()）
+     * @param page      页码
+     * @param charStart 页内字符起点（拆分片按 piece 偏移线性映射）
+     * @param charEnd   页内字符终点
+     */
+    private Chunk buildChunk(String documentId, ChunkContext context, ChunkBridgeChunk bc,
+                             Map<Integer, cn.studykid.rag.ports.LayoutBlock> blockByIndex,
+                             ChunkRole role, String rawText,
+                             int page, int charStart, int charEnd) {
+        String trimmed = rawText.trim();
         String sectionPath = String.join(SectionPathStack.SEPARATOR, bc.headings());
         Chunk.Locator locator = new Chunk.Locator(page, sectionPath,
                 effectiveExerciseNo(bc, blockByIndex), charStart, charEnd);
@@ -269,7 +302,7 @@ public class HybridChunkerClient implements BlockChunker {
                 new LayoutFacts(
                         role.isAnswerBearing(),
                         "HYBRID_CHUNK",
-                        BlockRoleResolver.solutionPrefixPattern().isEmpty() ? null : null));
+                        BlockRoleResolver.matchedSolutionPrefix(trimmed)));
     }
 
     /**

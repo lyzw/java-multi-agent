@@ -47,8 +47,30 @@ public record Chunk(
          * <p>⚠️ 为 null 表示「未采集」（旧数据 / 非解析路径产生的片段），
          * 界面应显示"无判定依据"，而不是伪造一个"不在答案区"。
          */
-        @Nullable LayoutFacts layoutFacts
+        @Nullable LayoutFacts layoutFacts,
+        /**
+         * 父块 ID（RAG-D28 P2-1 父子块模型）。
+         *
+         * <p>⚠️ 为 null 表示该块是<b>顶层块</b>（独立语义单元或父块）；
+         * 非空时本块是子块，{@link #chunkLevel()}={@link #LEVEL_CHILD}，
+         * 检索命中本块时由 {@code RetrievalPolicy.expandParents} 回带父块送 LLM。
+         */
+        @Nullable String parentId,
+        /**
+         * 层级：{@link #LEVEL_PARENT}=0 父块（上下文聚合），
+         * {@link #LEVEL_CHILD}=1 子块（精确召回/算 embedding）。
+         *
+         * <p>⚠️ 既有无父子概念的自然块默认 0（顶层）——它们本身就是按结构切出的
+         * 完整语义单元，不因为新增字段而被降级成"孤儿子块"。
+         */
+        int chunkLevel
 ) {
+
+    /** 父块层级：上下文聚合，送 LLM 阅读与引用展示。 */
+    public static final int LEVEL_PARENT = 0;
+
+    /** 子块层级：精确召回，计算 embedding。 */
+    public static final int LEVEL_CHILD = 1;
 
     /**
      * 向后兼容构造（不含版面事实）。
@@ -64,6 +86,38 @@ public record Chunk(
                  @NonNull String contentHash) {
         this(id, documentId, edition, role, text, locator,
                 knowledgePointIds, exerciseRef, contentHash, null);
+    }
+
+    /**
+     * 向后兼容构造（含版面事实，无父子字段）。
+     *
+     * <p>⚠️ 逐字段带过（铁律 #8）：父子字段以"顶层块"默认值补齐，
+     * 不因兼容构造静默丢失既有任何字段。
+     */
+    public Chunk(@NonNull String id, @NonNull String documentId,
+                 @NonNull EditionCoordinate edition, @NonNull ChunkRole role,
+                 @NonNull String text, @NonNull Locator locator,
+                 @NonNull List<String> knowledgePointIds, @Nullable String exerciseRef,
+                 @NonNull String contentHash, @Nullable LayoutFacts layoutFacts) {
+        this(id, documentId, edition, role, text, locator,
+                knowledgePointIds, exerciseRef, contentHash, layoutFacts, null, LEVEL_PARENT);
+    }
+
+    /** @return 是否为子块（有父块且层级为 1）。 */
+    public boolean isChild() {
+        return parentId != null && chunkLevel == LEVEL_CHILD;
+    }
+
+    /**
+     * 派生一个指向父块的子块版本（全字段逐字段带过，铁律 #8）。
+     *
+     * @param newParentId 父块 ID
+     * @return 子块副本
+     */
+    public @NonNull Chunk asChildOf(@NonNull String newParentId) {
+        return new Chunk(id, documentId, edition, role, text, locator,
+                knowledgePointIds, exerciseRef, contentHash, layoutFacts,
+                newParentId, LEVEL_CHILD);
     }
 
     public Chunk {
@@ -86,6 +140,12 @@ public record Chunk(
             throw new IllegalArgumentException("locator 不能为空");
         }
         knowledgePointIds = knowledgePointIds == null ? List.of() : List.copyOf(knowledgePointIds);
+        if (chunkLevel != LEVEL_PARENT && chunkLevel != LEVEL_CHILD) {
+            throw new IllegalArgumentException("chunkLevel 只能是 0（父）或 1（子），实际 " + chunkLevel);
+        }
+        if (chunkLevel == LEVEL_CHILD && (parentId == null || parentId.isBlank())) {
+            throw new IllegalArgumentException("子块必须有非空 parentId");
+        }
     }
 
     /**

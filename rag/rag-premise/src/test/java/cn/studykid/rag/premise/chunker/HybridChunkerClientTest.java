@@ -214,6 +214,84 @@ class HybridChunkerClientTest {
                 .isEqualTo(ChunkPolicyConfig.productionDefault().stableString());
     }
 
+    // ---------- P2-6 两修：matchedPrefix 真实回填 + 超长块实拆 ----------
+
+    @Test
+    @DisplayName("P2-6：matchedPrefix 真实回填（判定与记录同源，校对页显示命中前缀）")
+    void matchedPrefixActuallyBackfilled() throws IOException {
+        String baseUrl = startBridge(200, bridgeResponse(
+                "{\"text\":\"解：配方得 y=(x-2)^2-1。\",\"headings\":[\"第3章\"],"
+                        + "\"page_numbers\":[45],\"char_spans\":[{\"start\":10,\"end\":40}],"
+                        + "\"item_refs\":[\"#/texts/0\"]}"), null);
+        PremiseDocument doc = document(List.of(
+                block(BlockType.PARAGRAPH, "解：配方。", 45, null, false, 0, 10)));
+
+        ChunkOutcome out = new HybridChunkerClient(baseUrl, 30)
+                .chunk(doc, ChunkPolicyConfig.productionDefault(), CONTEXT);
+
+        var facts = out.chunks().get(0).layoutFacts();
+        assertThat(facts).isNotNull();
+        assertThat(facts.matchedPrefix()).as("块首「解：」必须真实采集，不能恒 null 伪采集")
+                .isEqualTo("解：");
+        assertThat(facts.describe()).contains("命中前缀");
+    }
+
+    @Test
+    @DisplayName("P2-6：无解答前缀时 matchedPrefix 为 null（不伪造）")
+    void matchedPrefixNullWhenAbsent() throws IOException {
+        String baseUrl = startBridge(200, bridgeResponse(
+                "{\"text\":\"顶点式定义。\",\"headings\":[],\"page_numbers\":[45],"
+                        + "\"char_spans\":[],\"item_refs\":[]}"), null);
+        ChunkOutcome out = new HybridChunkerClient(baseUrl, 30)
+                .chunk(document(List.of()), ChunkPolicyConfig.productionDefault(), CONTEXT);
+        assertThat(out.chunks().get(0).layoutFacts().matchedPrefix()).isNull();
+    }
+
+    @Test
+    @DisplayName("P2-6：超长非答案块实际拆成多片（不再只计数不拆），locator 偏移连续")
+    void oversizeChunkActuallySplit() throws IOException {
+        String longText = "二次函数顶点式的定义与性质讲解。".repeat(40); // > 512
+        String baseUrl = startBridge(200, bridgeResponse(
+                "{\"text\":\"" + longText + "\",\"headings\":[\"第3章\"],"
+                        + "\"page_numbers\":[45],\"char_spans\":[{\"start\":100,\"end\":"
+                        + (100 + longText.length()) + "}],\"item_refs\":[\"#/texts/0\"]}"), null);
+        PremiseDocument doc = document(List.of(
+                block(BlockType.PARAGRAPH, "讲解。", 45, null, false, 0, 10)));
+
+        ChunkOutcome out = new HybridChunkerClient(baseUrl, 30)
+                .chunk(doc, ChunkPolicyConfig.productionDefault(), CONTEXT);
+
+        assertThat(out.chunks().size()).as("超长块必须实际拆成多片").isGreaterThan(1);
+        assertThat(out.trace().splitOversizeCount()).isEqualTo(1);
+        assertThat(out.chunks()).allSatisfy(c -> {
+            assertThat(c.text().length()).isLessThanOrEqualTo(ChunkPolicyConfig.DEFAULT_MAX_TOKENS);
+            assertThat(c.role()).isEqualTo(ChunkRole.EXPLANATION);
+            assertThat(c.locator().charStart()).isGreaterThanOrEqualTo(100);
+        });
+        // 各片 id 唯一（charStart 派生，不能碰撞互相覆盖）
+        assertThat(out.chunks().stream().map(c -> c.id()).distinct().count())
+                .isEqualTo(out.chunks().size());
+    }
+
+    @Test
+    @DisplayName("P2-6：超长答案块整块保留（拆散会破坏答案-题号对应）")
+    void oversizeAnswerChunkKeptWhole() throws IOException {
+        String longText = "解：第一步。".repeat(120); // > 512，且在答案区
+        String baseUrl = startBridge(200, bridgeResponse(
+                "{\"text\":\"" + longText + "\",\"headings\":[],"
+                        + "\"page_numbers\":[45],\"char_spans\":[],"
+                        + "\"item_refs\":[\"#/texts/0\"]}"), null);
+        PremiseDocument doc = document(List.of(
+                block(BlockType.PARAGRAPH, "解：。", 45, "12", true, 0, 10)));
+
+        ChunkOutcome out = new HybridChunkerClient(baseUrl, 30)
+                .chunk(doc, ChunkPolicyConfig.productionDefault(), CONTEXT);
+
+        assertThat(out.chunks()).hasSize(1);
+        assertThat(out.chunks().get(0).role()).isEqualTo(ChunkRole.EXERCISE_ANSWER);
+        assertThat(out.trace().splitOversizeCount()).isZero();
+    }
+
     // ---------- fail-closed（不静默回退 heading） ----------
 
     @Test
