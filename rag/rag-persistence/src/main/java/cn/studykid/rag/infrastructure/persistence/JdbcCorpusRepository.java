@@ -124,7 +124,7 @@ public class JdbcCorpusRepository implements CorpusRepository {
                         COALESCE((SELECT g.generation FROM rag_index_generation g
                                    WHERE g.tenant_id = {rag_tenant}
                                      AND g.status = 'ACTIVE' LIMIT 1), 1),
-                        ?, ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?::uuid, ?, ?, ?)
                 ON CONFLICT (chunk_id) DO UPDATE SET
                     role = EXCLUDED.role,
                     text = EXCLUDED.text,
@@ -391,7 +391,7 @@ public class JdbcCorpusRepository implements CorpusRepository {
                             COALESCE((SELECT g.generation FROM rag_index_generation g
                                        WHERE g.tenant_id = {rag_sentinel}
                                          AND g.status = 'ACTIVE' LIMIT 1), 1),
-                            ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?::uuid, ?, ?, ?,
                             'PLATFORM')
                     ON CONFLICT (chunk_id) DO UPDATE SET
                         role = EXCLUDED.role,

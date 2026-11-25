@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.Deflater;
 
 import org.junit.jupiter.api.DisplayName;
@@ -75,6 +76,83 @@ class DoclingSegmentedParseTest {
     void defaultSegmentParams() {
         assertEquals(20, DoclingDocumentParserPort.DEFAULT_PAGES_PER_SEGMENT);
         assertEquals(60, DoclingDocumentParserPort.DEFAULT_MAX_SEGMENTS);
+    }
+
+    // ------------------------------------------------------------------
+    // 2026-11-24 D08 G1 真语料端到端守卫：分段路径不得丢 P3-1 语义槽位
+    // ------------------------------------------------------------------
+
+    /**
+     * 分段路径的字符区间连续化<b>不得丢掉表格网格与公式语义标注</b>。
+     *
+     * <p><b>⚠️ 这是真库端到端抓到的缺陷</b>（沪教版六年级数学上册 162 页实跑）：
+     * 分段路径用 {@code mapper.map(body)}（恒等解包成 LayoutBlock），
+     * 而 {@code TableGrid} 与 {@code FormulaAnnotation} 挂在 {@code PremiseBlock}
+     * 包装层上——解包即丢失；随后 {@code ParseWithRaw} 的四参兼容构造
+     * （{@code PremiseBlock.fromLayoutBlocks}）再丢一次。
+     * 后果：<b>所有 &gt;20 页的真实教材</b>（分段路径）下，P3-1 的
+     * {@code formula_natural_language} 与 {@code caption_or_table_summary}
+     * 两个语义槽位恒为 null——实测 8 个 TABLE 块 / 166 个 FORMULA 块全空，
+     * DDL 19 的两列永远写不进值，而单测全绿。
+     *
+     * <p>本用例守住「区间连续化在 PremiseBlock 层做、包装层字段逐字段带过」。
+     */
+    @Test
+    @DisplayName("分段区间连续化：表格网格与公式语义标注必须逐字段带过（不许重建即丢）")
+    void premiseRebasePreservesSemanticFields() throws Exception {
+        cn.studykid.rag.premise.normalize.TableGrid grid =
+                new cn.studykid.rag.premise.normalize.TableGrid(
+                        List.of(List.of("序号", "收入"), List.of("1", "85")), 1);
+        cn.studykid.rag.premise.normalize.FormulaAnnotation formula =
+                cn.studykid.rag.premise.normalize.FormulaAnnotation.mapped(
+                        "F = ma", "牛顿第二定律", Map.of("F", "合外力"), "F=ma");
+
+        LayoutBlock tableLayout = new LayoutBlock(BlockType.TABLE, "| 序号 | 收入 |", 1, 0,
+                "第1章", null, false, 0, 12);
+        LayoutBlock formulaLayout = new LayoutBlock(BlockType.FORMULA, "F = ma", 1, 0,
+                "第1章", null, false, 12, 18);
+
+        List<cn.studykid.rag.premise.model.PremiseBlock> merged = List.of(
+                new cn.studykid.rag.premise.model.PremiseBlock(
+                        tableLayout, null, Double.NaN, grid, null),
+                new cn.studykid.rag.premise.model.PremiseBlock(
+                        formulaLayout, null, Double.NaN, null, formula));
+
+        var port = new DoclingDocumentParserPort("http://x", 10, 20, 60);
+        java.lang.reflect.Method m = null;
+        for (java.lang.reflect.Method cand : DoclingDocumentParserPort.class.getDeclaredMethods()) {
+            if (cand.getName().equals("rebasePremiseCharOffsets")) {
+                m = cand;
+                break;
+            }
+        }
+        assertTrue(m != null, "应存在 rebasePremiseCharOffsets（分段路径必须在 PremiseBlock 层连续化）");
+        m.setAccessible(true);
+        List<cn.studykid.rag.premise.model.PremiseBlock> out;
+        try {
+            @SuppressWarnings("unchecked")
+            List<cn.studykid.rag.premise.model.PremiseBlock> r =
+                    (List<cn.studykid.rag.premise.model.PremiseBlock>) m.invoke(port, merged);
+            out = r;
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw new IllegalStateException("rebasePremiseCharOffsets 调用失败", e.getCause());
+        }
+
+        assertEquals(2, out.size());
+        // ① 区间连续（分段路径的原有语义不能被改坏）
+        assertEquals(0, out.get(0).toLayoutBlock().charStart());
+        assertEquals(out.get(0).toLayoutBlock().charEnd(), out.get(1).toLayoutBlock().charStart(),
+                "块 1 的起点必须等于块 0 的终点");
+        assertEquals(18, out.get(1).toLayoutBlock().charEnd());
+        // ② 表格网格必须还在（丢了 → caption_or_table_summary 恒 null）
+        assertTrue(out.get(0).hasTableGrid(), "表格网格必须在重建后保留（否则语义槽位空转）");
+        assertEquals(grid, out.get(0).tableGrid());
+        // ③ 公式语义标注必须还在（丢了 → formula_natural_language 恒 null）
+        assertTrue(out.get(1).hasFormulaAnnotation(), "公式语义标注必须在重建后保留（否则语义槽位空转）");
+        assertEquals(formula, out.get(1).formulaAnnotation());
+        // ④ 页码等其它字段原样保留
+        assertEquals(1, out.get(1).toLayoutBlock().pageNumber());
+        assertEquals("第1章", out.get(1).toLayoutBlock().sectionPath());
     }
 
     // ------------------------------------------------------------------

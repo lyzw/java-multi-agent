@@ -91,16 +91,47 @@ public class JdbcIngestSourceLoader implements TenantScopedIngestSource {
             // ⚠️ 与 load 同样的理由：RLS 需要会话租户，且 set_config 是事务局部的。
             jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
                     String.class, tenantId);
-            // 取该来源下的版本坐标（RAG-D16 之后新登记来源都有真实五轴）。
+            // 取该来源的版本坐标（D28 G1-b）：优先按来源自身五轴找共享 edition。
+            // rag_edition_unique 不含 source_id，第二个同五轴来源在 edition 上没有
+            // 自己的行；只按 source_id 找会拿到默认坐标，把错误结果展示成"预览成功"。
             List<EditionRow> editions = jdbcTemplate.query("""
-                            SELECT edition_id::text
-                              FROM rag_edition
-                             WHERE tenant_id = ?::uuid AND source_id = ?::uuid
-                             ORDER BY created_at ASC, edition_id
+                            SELECT e.edition_id::text
+                              FROM rag_source s
+                              JOIN rag_edition e
+                                ON e.tenant_id = s.tenant_id
+                               AND e.subject = s.edition_subject
+                               AND e.grade = s.edition_grade
+                               AND e.term = s.edition_term
+                               AND e.publisher = s.edition_publisher
+                               AND e.revision_code = s.edition_revision_code
+                             WHERE s.tenant_id = ?::uuid AND s.source_id = ?::uuid
+                               AND s.edition_subject IS NOT NULL
+                             ORDER BY e.created_at ASC, e.edition_id
                              LIMIT 1
                             """,
                     (rs, i) -> new EditionRow(rs.getString(1)),
                     tenantId, sourceId);
+            if (editions.isEmpty()) {
+                Boolean declaredAxes = jdbcTemplate.queryForObject("""
+                        SELECT EXISTS (SELECT 1 FROM rag_source
+                                        WHERE tenant_id = ?::uuid AND source_id = ?::uuid
+                                          AND edition_subject IS NOT NULL)
+                        """, Boolean.class, tenantId, sourceId);
+                // 声明了五轴却查不到版本：数据破损，fail-closed，不展示默认坐标。
+                if (Boolean.TRUE.equals(declaredAxes)) {
+                    return Optional.<PreviewContext>empty();
+                }
+                // 存量来源（无五轴）：维持既有 source_id 解析口径。
+                editions = jdbcTemplate.query("""
+                                SELECT edition_id::text
+                                  FROM rag_edition
+                                 WHERE tenant_id = ?::uuid AND source_id = ?::uuid
+                                 ORDER BY created_at ASC, edition_id
+                                 LIMIT 1
+                                """,
+                        (rs, i) -> new EditionRow(rs.getString(1)),
+                        tenantId, sourceId);
+            }
             if (editions.isEmpty()) {
                 return Optional.<PreviewContext>empty();
             }

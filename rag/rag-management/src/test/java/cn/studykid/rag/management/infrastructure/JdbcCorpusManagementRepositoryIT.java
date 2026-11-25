@@ -188,6 +188,44 @@ class JdbcCorpusManagementRepositoryIT {
         // ⚠️ 不再 seed 租户：RAG 库里**没有**租户表（V4 迁移已移除 rag_tenant 副本）。
         //    租户上下理由 platform 下发（见 RagTenantContext）。
         //    跨租户隔离改由「两个不同的 tenantId 上下文」验证。
+
+        // ⚠️ 清掉固定 IT 租户的历史夹具：本类大量使用固定 isbn / content_hash
+        //    （便于精确断言与跨用例共享），重复跑 IT 时若不清会成为
+        //    rag_source_tenant_isbn_uq / rag_document_tenant_content_hash_uq 的
+        //    假失败（2026-11-25 真库全量 IT 实测：3 个失败全源于此）。
+        //    只清 T/U/M 三个专用租户，不碰平台哨兵桶与其他测试租户的数据。
+        cleanFixedTenantFixtures();
+    }
+
+    /**
+     * 每个用例开始前清理固定 IT 租户留下的夹具，使本 IT 可重复执行。
+     *
+     * <p>必须在事务内先 {@code set_config('app.tenant_id', ...)}：RLS 的 DELETE
+     * 策略是 {@code tenant_id = rag_current_tenant()}，不设租户会静默删不到任何行
+     * （铁律：设租户须在事务内且在 SQL 前）。
+     *
+     * <p>删除顺序按外键依赖：citation / embedding / chunk → job / inspection /
+     * audit → document → edition → source。全局哨兵桶（{@code scope='PLATFORM'}）
+     * 不属于这三个租户，不受影响。
+     */
+    private void cleanFixedTenantFixtures() {
+        for (String tenant : java.util.List.of(T, U, M)) {
+            transactionTemplate.executeWithoutResult(st -> {
+                jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                        String.class, tenant);
+                jdbcTemplate.update("DELETE FROM rag_answer_citation WHERE tenant_id = ?::uuid", tenant);
+                jdbcTemplate.update("DELETE FROM rag_chunk_embedding WHERE tenant_id = ?::uuid", tenant);
+                jdbcTemplate.update("DELETE FROM rag_chunk WHERE tenant_id = ?::uuid", tenant);
+                jdbcTemplate.update("DELETE FROM rag_ingest_job WHERE tenant_id = ?::uuid", tenant);
+                jdbcTemplate.update("DELETE FROM rag_inspection_record WHERE tenant_id = ?::uuid", tenant);
+                // ⚠️ rag_access_audit 是追加写表（trg_rag_audit_append_only 禁止
+                //    UPDATE/DELETE），无法也不应清理；其断言均按当次随机 source_id
+                //    过滤，历史残留不会造成假失败。
+                jdbcTemplate.update("DELETE FROM rag_document WHERE tenant_id = ?::uuid", tenant);
+                jdbcTemplate.update("DELETE FROM rag_edition WHERE tenant_id = ?::uuid", tenant);
+                jdbcTemplate.update("DELETE FROM rag_source WHERE tenant_id = ?::uuid", tenant);
+            });
+        }
     }
 
     @AfterEach
@@ -676,6 +714,62 @@ class JdbcCorpusManagementRepositoryIT {
     }
 
     @Test
+    @DisplayName("共享五轴版本：第二个同五轴来源上传仍挂到真实 edition（不退化成默认坐标）")
+    void sharedEditionCoordinateDoesNotDegrade() {
+        String revision = "SHARED-ED-IT-20261125-M";
+        CorpusSource first = repository.registerSource(RagManagementContext.forTenant(ctxM),
+                new SourceRegistration("教材", "共享五轴教材·来源甲", "沪教版",
+                        "9787100000091", null, null, null,
+                        "数学", "八年级", "下册", revision, "沪教版"),
+                REVIEWER);
+        CorpusSource second = repository.registerSource(RagManagementContext.forTenant(ctxM),
+                new SourceRegistration("教材", "共享五轴教材·来源乙", "沪教版",
+                        "9787100000092", null, null, null,
+                        "数学", "八年级", "下册", revision, "沪教版"),
+                REVIEWER);
+        assertNotNull(first);
+        assertNotNull(second);
+
+        CorpusDocument docFirst = repository.importDocument(RagManagementContext.forTenant(ctxM),
+                first.sourceId(),
+                new DocumentImportCommand("PDF", "甲.pdf", "obj://shared/first.pdf",
+                        "e".repeat(64), null, null, null, null, null), REVIEWER);
+        CorpusDocument docSecond = repository.importDocument(RagManagementContext.forTenant(ctxM),
+                second.sourceId(),
+                new DocumentImportCommand("PDF", "乙.pdf", "obj://shared/second.pdf",
+                        "9".repeat(64), null, null, null, null, null), REVIEWER);
+        assertNotNull(docFirst);
+        assertNotNull(docSecond);
+
+        String editionFirst = queryEditionId(ctxM, docFirst.documentId());
+        String editionSecond = queryEditionId(ctxM, docSecond.documentId());
+        assertEquals(editionFirst, editionSecond,
+                "两个同五轴来源应共享同一个真实 edition（D28 G1-b 缺口反证）");
+
+        String persistedRevision = transactionTemplate.execute(st -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, ctxM.tenantId());
+            return jdbcTemplate.queryForObject(
+                    "SELECT revision_code FROM rag_edition WHERE edition_id = ?::uuid",
+                    String.class, editionSecond);
+        });
+        assertEquals(revision, persistedRevision,
+                "第二个来源不得落到 src-<sourceId> 默认坐标");
+
+        Integer axisSourceCount = transactionTemplate.execute(st -> {
+            jdbcTemplate.queryForObject("SELECT set_config('app.tenant_id', ?, true)",
+                    String.class, ctxM.tenantId());
+            return jdbcTemplate.queryForObject("""
+                    SELECT count(*) FROM rag_source
+                     WHERE tenant_id = ?::uuid AND edition_subject = '数学'
+                       AND edition_grade = '八年级' AND edition_term = '下册'
+                       AND edition_publisher = '沪教版' AND edition_revision_code = ?
+                    """, Integer.class, ctxM.tenantId(), revision);
+        });
+        assertEquals(2, axisSourceCount, "两个来源都必须落自己的五轴（共享 edition 的自然键入口）");
+    }
+
+    @Test
     @DisplayName("载体导入：来源不存在时返回 null（而非 FK 违约 500）")
     void importDocumentMissingSourceReturnsNull() {
         CorpusDocument doc = repository.importDocument(
@@ -897,17 +991,27 @@ class JdbcCorpusManagementRepositoryIT {
     }
 
     @Test
-    @DisplayName("平台全局档的统计口径只覆盖全局行")
+    @DisplayName("平台全局档的统计口径只覆盖全局行（用登记前后差值，避免依赖全局桶绝对条数）")
     void platformScopeStatisticsIgnoreTenantRows() {
-        register("9787100000022", "租户T另一本");
         RagManagementContext platform =
                 RagManagementContext.forPlatform(TrustTier.OFFICIAL_TUTORIAL);
-        CorpusStatistics globalStats = repository.statistics(platform);
-        CorpusStatistics tenantStats = repository.statistics(RagManagementContext.forTenant(ctxT));
-        assertTrue(tenantStats.totalSources() > 0,
-                "租户 T 此刻应有夹具来源；若为 0 说明租户档也查不到东西，对照失效");
-        assertTrue(globalStats.totalSources() <= tenantStats.totalSources(),
-                "全局档的统计不得把租户行算进来");
+        RagManagementContext tenant = RagManagementContext.forTenant(ctxT);
+        CorpusStatistics globalBefore = repository.statistics(platform);
+        CorpusStatistics tenantBefore = repository.statistics(tenant);
+
+        register("9787100000022", "租户T另一本");
+
+        CorpusStatistics globalAfter = repository.statistics(platform);
+        CorpusStatistics tenantAfter = repository.statistics(tenant);
+        long globalDelta = globalAfter.totalSources() - globalBefore.totalSources();
+        long tenantDelta = tenantAfter.totalSources() - tenantBefore.totalSources();
+
+        // ⚠️ 不比较两桶绝对条数：全局桶是多用例共写的（G-1/G-2 也往里登记），
+        //    残留行数会随运行历史浮动。真正要守的是「租户登记不改变全局桶」。
+        assertEquals(0L, globalDelta,
+                "租户来源登记不得让全局档统计增加（混入即跨租户泄漏）");
+        assertTrue(tenantDelta > 0L,
+                "登记后租户档统计必须增加；若为 0 说明对照失效（可能 RLS 把写入也拦了）");
     }
 
     @Test
@@ -1200,10 +1304,15 @@ class JdbcCorpusManagementRepositoryIT {
         RagOpsDataSourceProvider session = opsChannelSession();
         requireAdminConnection();
         // ⚠️ 前置条件（不是装饰）：本用例会替「全局桶里所有待索引片段」重算向量，
-        //    而这里的嵌入端口是测试替身。全局桶非空时它会覆盖生产代际的向量，
+        //    而这里的嵌入端口是测试替身。全局桶非空时它会覆盖真实教材的向量
+        //    （2026-11-25 实测哨兵桶有 6 本真实教材 + D08G1 标定共 8894 片段），
         //    所以宁可不跑，也不能跑。
-        assertEquals(0, countGlobalChunks(),
-                "全局桶已有片段时不得跑本用例：占位向量会替真实语料重算索引");
+        //    ⚠️ 用 assumeTrue「跳过」而不是 assertEquals「失败」：这是环境前置条件
+        //    不满足，不是实现缺陷；硬失败会把安全保护误报成回归。
+        long globalChunksBefore = countGlobalChunks();
+        Assumptions.assumeTrue(globalChunksBefore == 0,
+                "skipped: 全局桶已有 " + globalChunksBefore
+                        + " 个真实片段，占位向量会替它们重算索引，宁可不跑");
 
         GlobalChain chain = seedGlobalChain("9787100000036", "全局重索引夹具教材");
         int tenantUntokenizedBefore = countTenantUntokenizedChunks();

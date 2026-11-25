@@ -264,20 +264,39 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
         //    「插入后按 created_at DESC 取最新一条」在并发登记下会取错行——
         //    两条登记的 created_at 可能相同，取到别人的记录。
         String sourceId = UUID.randomUUID().toString();
+        // ⚠️ 来源自身保存归一五轴（D28 G1-b）：版本坐标是共享的，第二个同五轴来源
+        //    在 rag_edition 上会被 ON CONFLICT DO NOTHING 吞掉。若这里不记下来源
+        //    自己的五轴，上传时只能按 rag_edition.source_id 找到默认坐标，检索必 0 命中。
+        //    五轴全空的存量路径保持 NULL（回落既有默认版本行为）。
+        String sourceEditionSubject = registration.hasFullEdition()
+                ? registration.normalizedEditionSubject() : null;
+        String sourceEditionGrade = registration.hasFullEdition()
+                ? registration.normalizedEditionGrade() : null;
+        String sourceEditionTerm = registration.hasFullEdition()
+                ? registration.term() : null;
+        String sourceEditionPublisher = registration.hasFullEdition()
+                ? registration.normalizedEditionPublisher() : null;
+        String sourceEditionRevisionCode = registration.hasFullEdition()
+                ? registration.revisionCode() : null;
         return writeVia(context, ch -> {
             ch.template().update("""
                     INSERT INTO rag_source
                         (source_id, tenant_id, scope, source_type, title, publisher, isbn, doi,
                          trust_tier, ver_status, ver_method, ver_evidence, verified_at,
-                         verified_by, ver_valid_days, license_status, object_ref, content_hash)
+                         verified_by, ver_valid_days, license_status, object_ref, content_hash,
+                         edition_subject, edition_grade, edition_term,
+                         edition_publisher, edition_revision_code)
                     VALUES (?::uuid, %s, %s, ?, ?, ?, ?, ?,
                             'UNVERIFIED', 'PENDING', 'NONE', NULL, NULL,
-                            NULL, 365, 'PENDING'::rag_license_status, ?, ?)
+                            NULL, 365, 'PENDING'::rag_license_status, ?, ?,
+                            ?, ?, ?, ?, ?)
                     """.formatted(ch.tenantExpr(), ch.scopeExpr()),
                     sourceId, registration.sourceType(), registration.title(),
                     registration.publisher(),
                     blankToNull(registration.isbn()), blankToNull(registration.doi()),
-                    blankToNull(registration.objectRef()), blankToNull(registration.contentHash()));
+                    blankToNull(registration.objectRef()), blankToNull(registration.contentHash()),
+                    sourceEditionSubject, sourceEditionGrade, sourceEditionTerm,
+                    sourceEditionPublisher, sourceEditionRevisionCode);
             // ⚠️ 登记也必须留痕（RAG-D07 §2.5：「至少 INGEST（登记）必须落审计」）。
             //    与 INSERT 同事务——审计写不进去则登记整体回滚，
             //    避免出现「库里有来源但无登记审计」的无痕数据。
@@ -1036,9 +1055,16 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
     /**
      * 解析一份文档载体应挂到的版本坐标（edition）。
      *
-     * <p>⚠️ 优先用<b>来源下第一条</b>版本坐标（同一来源下多载体共享版本是合理的）；
-     * 若来源下尚无版本（典型的「只录入文档、未维护版本」），则确保存在一个
-     * 「默认版本」并返回其 ID——让录入交互不必强制先填五轴版本信息。
+     * <p>⚠️ 第一优先：来源登记的<b>五轴自然键</b>（D28 G1-b）。rag_edition 按五轴
+     * 全局唯一且不含 source_id，两个来源登记同一版本时后一个会被
+     * {@code ON CONFLICT DO NOTHING} 吞掉；只按 {@code rag_edition.source_id}
+     * 找会拿到默认坐标并让 STRICT 检索 0 候选。来源自身保存的五轴才是可靠入口。
+     *
+     * <p>⚠️ 第二优先（存量兼容）：来源无五轴时沿用「source_id 下第一条」；
+     * 若连版本都没有，才建默认坐标——让「只录入文档、未维护版本」的旧路可走。
+     *
+     * <p>⚠️ fail-loud：来源声明了五轴但自然键查不到版本行，属数据完整性破损，
+     * 禁止静默降级为默认坐标（那会重演「检索 0 命中且无人知道为什么」）。
      *
      * @param ch       写通道（已含租户表达式与作用域字面量）
      * @param sourceId 来源 ID
@@ -1047,6 +1073,35 @@ public class JdbcCorpusManagementRepository implements CorpusManagementPort {
      */
     private String resolveEdition(@NonNull WriteChannel ch, @NonNull String sourceId,
                                  @NonNull String scopeExpr) {
+        List<String> byAxes = ch.template().query(("""
+                SELECT e.edition_id::text
+                  FROM rag_source s
+                  LEFT JOIN rag_edition e
+                    ON e.tenant_id = s.tenant_id
+                   AND e.subject = s.edition_subject
+                   AND e.grade = s.edition_grade
+                   AND e.term = s.edition_term
+                   AND e.publisher = s.edition_publisher
+                   AND e.revision_code = s.edition_revision_code
+                 WHERE s.tenant_id = %s AND s.source_id = ?::uuid
+                   AND s.edition_subject IS NOT NULL
+                   AND s.edition_grade IS NOT NULL
+                   AND s.edition_term IS NOT NULL
+                   AND s.edition_publisher IS NOT NULL
+                   AND s.edition_revision_code IS NOT NULL
+                 ORDER BY e.created_at ASC, e.edition_id
+                 LIMIT 1
+                """).formatted(ch.tenantExpr()),
+                (rs, i) -> rs.getString(1), sourceId);
+        if (!byAxes.isEmpty()) {
+            String editionId = byAxes.get(0);
+            if (editionId == null) {
+                throw new IllegalStateException(
+                        "来源已登记五轴但版本坐标不存在（禁止降级为默认版本）: sourceId=" + sourceId);
+            }
+            return editionId;
+        }
+        // 存量路径：来源尚未登记五轴，维持既有 source_id 解析与默认版本行为。
         List<String> existing = ch.template().query(
                 "SELECT edition_id::text FROM rag_edition"
                         + " WHERE tenant_id = " + ch.tenantExpr() + " AND source_id = ?::uuid"

@@ -230,7 +230,8 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
         log.info("[RAG] Docling 分段解析 documentId={} 总页数={} 段数={} 每段={}页",
                 documentId, totalPages, segmentCount, pagesPerSegment);
 
-        List<LayoutBlock> merged = new java.util.ArrayList<>();
+        List<cn.studykid.rag.premise.model.PremiseBlock> merged =
+                new java.util.ArrayList<>();
         String lastRaw = null;
         for (int seg = 0; seg < segmentCount; seg++) {
             int from = seg * pagesPerSegment + 1;
@@ -238,26 +239,43 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
             // ⚠️ 单段失败 → 整册失败（不部分入库，D04 §1）：
             //    半本教材入库会把「数据缺失」伪装成「知识边界」。
             String body = callDocling(documentId, content, from, to);
-            List<LayoutBlock> segBlocks = mapper.map(body);
+            // ⚠️⚠️ 必须是 mapToPremiseBlocks（不是 map）——2026-11-24 D08 G1 真语料端到端实测踩到：
+            //    map() 是「恒等解包」成 LayoutBlock，**表格网格与公式语义标注挂在 PremiseBlock 包装层**
+            //    （不在端口块上），解包即丢失；再经 ParseWithRaw 的四参兼容构造
+            //    （PremiseBlock.fromLayoutBlocks）二次丢失。后果：分段路径（>20 页，**所有真实教材**）
+            //    下 P3-1 的两个语义槽位恒为 null——`formula_natural_language` 与
+            //    `caption_or_table_summary` 一条都写不进去，DDL 19 的两列永远空着，
+            //    而单测（直连整册路径 / 手工构造 PremiseBlock）全绿 ⇒ 假绿。
+            //    整册路径（小册）走的就是 mapToPremiseBlocks，故两条路径口径必须一致。
+            List<cn.studykid.rag.premise.model.PremiseBlock> segBlocks =
+                    mapper.mapToPremiseBlocks(body);
             merged.addAll(segBlocks);
             lastRaw = body;
             log.debug("[RAG] Docling 分段 {}/{} 页 {}-{} → {} 块",
                     seg + 1, segmentCount, from, to, segBlocks.size());
         }
         // ③ 合并后重新连续化字符区间（各段独立映射 → 区间会重叠/有空洞）
-        List<LayoutBlock> continuous = rebaseCharOffsets(merged);
+        // ⚠️ rebase 必须在 PremiseBlock 层做：重排的是被包装的 LayoutBlock，
+        //    包装层上的表格网格 / 公式语义标注必须**逐字段带过**（铁律 #8），
+        //    否则重建即丢 → P3-1 语义槽位空转（实测：整册 162 页教材
+        //    8 个 TABLE 块 / 166 个 FORMULA 块的语义槽位全为空）。
+        List<cn.studykid.rag.premise.model.PremiseBlock> continuous =
+                rebasePremiseCharOffsets(merged);
         if (continuous.isEmpty()) {
             throw new DoclingUnavailableException(
                     "Docling 分段解析产出 0 个块（documentId=" + documentId + "）");
         }
+        List<LayoutBlock> continuousLayouts = continuous.stream()
+                .map(cn.studykid.rag.premise.model.PremiseBlock::toLayoutBlock)
+                .toList();
         // ⚠️⚠️ 页面覆盖守卫（2026-11-10）：若已知总页数 N，但解析出的块只落在
         //    前 MIN_PAGE_COVERAGE 比例的页面上，说明解析被静默截断
         //    （典型：page_range 钳成 [1,1] 只切封面）。这种「不报错、只是内容空掉」
         //    比直接失败危险——它会被标「已就绪」并进入检索。这里 fail-closed。
-        assertPageCoverage(documentId, totalPages, continuous);
+        assertPageCoverage(documentId, totalPages, continuousLayouts);
         // ⚠️ 分段路径：raw 取最后一段且 wholeDocument=false（不可用于分块桥，见方法注释）
-        return new ParseWithRaw(documentId, continuous,
-                lastRaw == null ? null : mapper.extractJsonContent(lastRaw), false);
+        return new ParseWithRaw(documentId, continuousLayouts,
+                lastRaw == null ? null : mapper.extractJsonContent(lastRaw), false, continuous);
     }
 
     /** 解析块必须覆盖至少该比例的最后页码（防「只切封面」的静默截断）。 */
@@ -487,6 +505,38 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
     }
 
     /**
+     * PremiseBlock 层的字符区间连续化（分段路径专用）。
+     *
+     * <p><b>⚠️ 为什么不能直接用 {@link #rebaseCharOffsets(List)}</b>：它只重建
+     * {@link LayoutBlock}，表格网格（{@code tableGrid}）与公式语义标注
+     * （{@code formulaAnnotation}）挂在 {@code PremiseBlock} 包装层上，
+     * 走 LayoutBlock 路径等于**把 P3-1 的两个语义槽位在重建时丢掉**。
+     * 本方法在包装层重建：重排被包装的 LayoutBlock，包装层其余字段逐字段带过（铁律 #8）。
+     *
+     * @param blocks 各段的 PremiseBlock（按段顺序）
+     * @return 字符区间连续、语义字段完整的新块序列
+     */
+    private List<cn.studykid.rag.premise.model.PremiseBlock> rebasePremiseCharOffsets(
+            List<cn.studykid.rag.premise.model.PremiseBlock> blocks) {
+        List<cn.studykid.rag.premise.model.PremiseBlock> out =
+                new java.util.ArrayList<>(blocks.size());
+        int cursor = 0;
+        for (cn.studykid.rag.premise.model.PremiseBlock b : blocks) {
+            LayoutBlock raw = b.toLayoutBlock();
+            int len = Math.max(0, raw.charEnd() - raw.charStart());
+            LayoutBlock rebased = new LayoutBlock(
+                    raw.type(), raw.text(), raw.pageNumber(), raw.headingLevel(),
+                    raw.sectionPath(), raw.exerciseNo(), raw.inAnswerZone(),
+                    cursor, cursor + len);
+            cursor += len;
+            out.add(new cn.studykid.rag.premise.model.PremiseBlock(
+                    rebased, b.pageBbox(), b.confidence(),
+                    b.tableGrid(), b.formulaAnnotation()));
+        }
+        return out;
+    }
+
+    /**
      * 把各段独立映射出的块合并成<b>字符区间连续</b>的序列。
      *
      * <p><b>⚠️ 为什么必须做这一步</b>：每段映射时 {@code charStart/charEnd} 都从 0 开始，
@@ -497,8 +547,7 @@ public class DoclingDocumentParserPort implements DocumentParserPort {
      * @param blocks 各段的块（按段顺序）
      * @return 字符区间连续的新块序列
      */
-    private List<LayoutBlock> rebaseCharOffsets(List<LayoutBlock> blocks) {
-        List<LayoutBlock> out = new java.util.ArrayList<>(blocks.size());
+    private List<LayoutBlock> rebaseCharOffsets(List<LayoutBlock> blocks) {        List<LayoutBlock> out = new java.util.ArrayList<>(blocks.size());
         int cursor = 0;
         for (LayoutBlock b : blocks) {
             int len = Math.max(0, b.charEnd() - b.charStart());

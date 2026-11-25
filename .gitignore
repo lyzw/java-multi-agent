@@ -99,3 +99,4 @@ platform/.sonar/
 /logs/
 .workbuddy
 .workbuddy-ai
+*.png

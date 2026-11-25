@@ -1,7 +1,7 @@
 -- =====================================================================
 -- rag 完整结构（pg_dump --schema-only 导出 + 手工补写扩展头）
 -- 【来源】迁移脚本 V1→V8 在全新空库逐个实跑（0 错误）后 pg_dump 导出，
---   再空库复放验证等价（13 表 / 135 列 / 53 约束 / 9 枚举 / 36 索引 /
+--   再空库复放验证等价（13 表 / 140 列 / 53 约束 / 9 枚举 / 36 索引 /
 --   13 RLS 开启 / 37 RLS 策略）。
 --   ⚠️ 2026-11-18 更正（O14）：表数/RLS 开启/策略数由 11/11/35 修正为实计 13/13/37，
 --      并加 RagDdlHeaderCountTest 静态守卫，避免头注释数字再次无人校验而漂移。
@@ -747,6 +747,14 @@ CREATE TABLE rag.rag_source (
     --    直接触发 CHECK 违约（真库实测已踩到：inspection_status 收到 'TENANT'）。
     --    追加在表尾则既有不带列名的 INSERT 依然按原顺序对齐。
     inspection_status text DEFAULT 'NOT_REQUIRED'::text NOT NULL,
+    -- ⚠️ 追加在表尾：02 种子 INSERT 不带列名，新列可空故既有 VALUES 不会错位。
+    --    来源自身保存归一五轴，登记时写入；NULL=存量来源未登记五轴，解析时回落
+    --    到 rag_edition.source_id（D28 G1-b 共享版本坐标缺口修复）。
+    edition_subject text,
+    edition_grade text,
+    edition_term text,
+    edition_publisher text,
+    edition_revision_code text,
     CONSTRAINT rag_source_identifier_chk CHECK ((((trust_tier = ANY (ARRAY['OFFICIAL_PUBLISHER'::rag.rag_trust_tier, 'OFFICIAL_TUTORIAL'::rag.rag_trust_tier])) AND (isbn IS NOT NULL)) OR ((trust_tier = ANY (ARRAY['PEER_REVIEWED_PAPER'::rag.rag_trust_tier, 'PREPRINT'::rag.rag_trust_tier])) AND (doi IS NOT NULL)) OR (trust_tier = 'UNVERIFIED'::rag.rag_trust_tier))),
     CONSTRAINT rag_source_scope_ck CHECK ((((scope = 'PLATFORM'::text) AND (tenant_id = rag.rag_global_tenant_id())) OR ((scope = 'TENANT'::text) AND (tenant_id <> rag.rag_global_tenant_id())))),
     CONSTRAINT rag_source_ver_valid_days_chk CHECK ((ver_valid_days > 0)),

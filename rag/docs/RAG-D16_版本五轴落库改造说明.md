@@ -49,6 +49,14 @@ VALUES (..., '未指定', '全学段', '全一册', '未指定', 'src-<sourceId>
 | 存量来源 | **不动**，新登记才写真实五轴 | 回填需额外推断规则与人工确认，风险与收益不匹配；存量来源仍走默认坐标 |
 | 五轴完整性 | **部分填写报 400**，全空则兼容 | 全空 = 存量/批量路径（须保持原行为）；部分填写 = 用户以为登记了某版本，实际会退化，必须拦下 |
 
+> **D28 G1-b 勘误（2026-11-25）**：「一个来源对应一个 edition 行」的假设在**两个来源共享同一五轴**时不成立——
+> `rag_edition_unique` 不含 `source_id`，后登记来源被 `ON CONFLICT DO NOTHING` 吞掉，
+> 只按 `rag_edition.source_id` 解析会拿到 `src-<sourceId>` 默认坐标并让 STRICT 检索 0 候选。
+> 修正不改 `rag_edition.source_id`（仍记录首次创建者），改为**来源自身保存归一五轴**
+> （`rag_source.edition_*` 五列，DDL 21），`resolveEdition` 与两处预览解析优先按
+> 来源五轴 → edition 自然键查询；无五轴的存量来源继续按 `source_id` 回落。D16 的
+> 「ON CONFLICT 不改 source_id」决策不变。
+
 ---
 
 ## 三、后端改造
@@ -175,10 +183,12 @@ if (missingAxes != null) {
    └─ INSERT rag_edition（真实五轴坐标）   ← 本次新增
    └─ 同一事务，同生同灭
 
-② 上传载体
+② 上传载体（D28 G1-b 勘误后）
    └─ resolveEdition(sourceId)
-        SELECT edition_id FROM rag_edition WHERE source_id = ? ORDER BY created_at ASC LIMIT 1
-        └─ ✅ 取到①写入的真实坐标（不再退化为默认坐标）
+        ① 来源有五轴：rag_source.edition_* → rag_edition 自然键（共享坐标）
+        ② 来源无五轴（存量）：SELECT edition_id FROM rag_edition WHERE source_id = ? ORDER BY created_at ASC LIMIT 1
+        ③ 仍无版本：建 src-<sourceId> 默认坐标
+        └─ ✅ 同五轴的第二个来源也能取到①写入的真实坐标（不再退化为默认坐标）
 
 ③ 检索
    └─ EditionScope.admits() 比较五轴

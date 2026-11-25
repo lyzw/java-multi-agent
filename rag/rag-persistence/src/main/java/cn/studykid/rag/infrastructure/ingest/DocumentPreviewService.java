@@ -145,16 +145,50 @@ public class DocumentPreviewService {
             jdbcTemplate.queryForObject(
                     "SELECT set_config('app.tenant_id', ?, true)", String.class, tenantId);
 
-            List<EditionCoordinate> editions = jdbcTemplate.query(
-                    "SELECT subject, grade, term, publisher, revision_code"
-                            + " FROM rag_edition"
-                            + " WHERE tenant_id = ?::uuid AND source_id = ?::uuid"
-                            + " ORDER BY created_at ASC, edition_id LIMIT 1",
+            // ⚠️ D28 G1-b：先按来源自身五轴取共享版本； rag_edition_unique 不含
+            //    source_id，第二个同五轴来源在 edition 上没有自己的行。若还按
+            //    source_id 找，预览会展示默认坐标，与真实入库（已按五轴解析）不一致。
+            List<EditionCoordinate> editions = jdbcTemplate.query("""
+                    SELECT e.subject, e.grade, e.term, e.publisher, e.revision_code
+                      FROM rag_source s
+                      JOIN rag_edition e
+                        ON e.tenant_id = s.tenant_id
+                       AND e.subject = s.edition_subject
+                       AND e.grade = s.edition_grade
+                       AND e.term = s.edition_term
+                       AND e.publisher = s.edition_publisher
+                       AND e.revision_code = s.edition_revision_code
+                     WHERE s.tenant_id = ?::uuid AND s.source_id = ?::uuid
+                       AND s.edition_subject IS NOT NULL
+                     ORDER BY e.created_at ASC, e.edition_id
+                     LIMIT 1
+                    """,
                     (rs, i) -> new EditionCoordinate(
                             subjectOf(rs.getString(1)), gradeOf(rs.getString(2)),
                             termOf(rs.getString(3)), publisherOf(rs.getString(4)),
                             rs.getString(5)),
                     tenantId, sourceId);
+            if (editions.isEmpty()) {
+                Boolean declaredAxes = jdbcTemplate.queryForObject("""
+                        SELECT EXISTS (SELECT 1 FROM rag_source
+                                        WHERE tenant_id = ?::uuid AND source_id = ?::uuid
+                                          AND edition_subject IS NOT NULL)
+                        """, Boolean.class, tenantId, sourceId);
+                if (Boolean.TRUE.equals(declaredAxes)) {
+                    // 声明五轴却查不到版本行：fail-closed，不用默认坐标冒充预览结果。
+                    return java.util.Optional.<PreviewContext>empty();
+                }
+                editions = jdbcTemplate.query(
+                        "SELECT subject, grade, term, publisher, revision_code"
+                                + " FROM rag_edition"
+                                + " WHERE tenant_id = ?::uuid AND source_id = ?::uuid"
+                                + " ORDER BY created_at ASC, edition_id LIMIT 1",
+                        (rs, i) -> new EditionCoordinate(
+                                subjectOf(rs.getString(1)), gradeOf(rs.getString(2)),
+                                termOf(rs.getString(3)), publisherOf(rs.getString(4)),
+                                rs.getString(5)),
+                        tenantId, sourceId);
+            }
             if (editions.isEmpty()) {
                 return java.util.Optional.<PreviewContext>empty();
             }
