@@ -111,6 +111,15 @@ class RagShadowLiveIT {
         adminDs.setPassword(envOrDefault(PG_ADMIN_PASSWORD_ENV, null));
         adminJdbcTemplate = new JdbcTemplate(adminDs);
 
+        // ⚠️ 真库保护（G-7 同款）：下面的 cleanup() 以 BYPASSRLS 角色**全表**删
+        // rag_chunk / rag_chunk_embedding，不认租户。生产库全局哨兵桶里有真实教材片段
+        // （2026-11-25 实测 8894 个），一旦在此库跑就会连它们一起删掉。
+        // 用 assumeTrue 跳过而不是 assertEquals 失败：这是环境前置条件不满足，不是实现回归。
+        long globalChunksBefore = countGlobalChunks();
+        Assumptions.assumeTrue(globalChunksBefore == 0,
+                "skipped: 全局桶已有 " + globalChunksBefore
+                        + " 个真实片段，本类 cleanup() 会全表删片段/向量，宁可不跑");
+
         controlRepo = new JdbcRetrievalRepository(appJdbcTemplate, embedder,
                 TrustTier.OFFICIAL_TUTORIAL,
                 new VectorColumn(VectorColumn.TYPE_VECTOR, LocalDeterministicEmbeddingPort.DIM));
@@ -196,6 +205,14 @@ class RagShadowLiveIT {
 
     private static RagScopeFilter scopeFor(String tenantId) {
         return new RagScopeFilter.TenantWithGlobal(tenantId);
+    }
+
+    /** 全局哨兵桶的真实片段数（管理员连接，绕过 RLS 看真实值）。 */
+    private int countGlobalChunks() {
+        Integer count = adminJdbcTemplate.queryForObject(
+                "SELECT count(*) FROM rag.rag_chunk WHERE tenant_id = rag.rag_global_tenant_id()",
+                Integer.class);
+        return count == null ? 0 : count;
     }
 
     private void cleanup() {

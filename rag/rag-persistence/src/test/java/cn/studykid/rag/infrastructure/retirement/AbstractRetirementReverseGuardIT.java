@@ -47,12 +47,26 @@ abstract class AbstractRetirementReverseGuardIT {
 
     protected JdbcTemplate appJdbcTemplate;
     protected JdbcTemplate adminJdbcTemplate;
+    /** 只有夹具真的种下去才允许 @AfterEach 清理，避免「守卫跳过后仍全表删」的数据事故。 */
+    private boolean fixturesSeeded;
 
     /** 批次标识，用于 {@code -Dm4.<batch>.retired} 门禁（r1/r2/r3/central）。 */
     protected abstract String batchProperty();
 
     /** 本批需清理的表（admin 连接执行，绕过 RLS）。 */
     protected abstract String[] cleanupSql();
+
+    /**
+     * 清理前的真库安全闸门（默认放行）。
+     *
+     * <p>⛔ 会全表删 {@code rag_chunk}/{@code rag_chunk_embedding} 的子类<b>必须</b>重写：
+     * 全局哨兵桶非空（生产上有真实教材语料）时 {@code assumeTrue} 跳过。
+     * 钩子在 admin 连接建好后、任何 cleanup 之前执行，跳过时 {@code fixturesSeeded} 仍为 false，
+     * {@link #tearDown()} 不会误删真数据（G-7 同款保护）。
+     */
+    protected void guardRealGlobalChunks() {
+        // 默认放行：R2/R3 的 cleanup 只碰本批小表，不涉及全局片段。
+    }
 
     /** 在两个租户下播种夹具行。 */
     protected abstract void seedTenants();
@@ -95,22 +109,26 @@ abstract class AbstractRetirementReverseGuardIT {
         adminDs.setPassword(envOrDefault(PG_ADMIN_PASSWORD_ENV, null));
         adminJdbcTemplate = new JdbcTemplate(adminDs);
 
+        guardRealGlobalChunks();
+
         for (String sql : cleanupSql()) {
             adminJdbcTemplate.update(sql);
         }
         seedTenants();
+        fixturesSeeded = true;
     }
 
     @AfterEach
     void tearDown() {
-        // ⚠️ @BeforeEach 的退役门禁会先于夹具初始化跳过用例；此时 @AfterEach 仍会执行。
-        //    未初始化连接就清理会把「有意跳过」变成 7 条 NPE，掩盖真实测试结果。
-        if (adminJdbcTemplate == null) {
+        // ⚠️ @BeforeEach 的退役门禁 / 真库保护会先于夹具初始化跳过用例；此时 @AfterEach 仍会执行。
+        //    没有「夹具已种下」标记就清理，轻则 NPE，重则以 BYPASSRLS 身份全表删掉真库的全局片段。
+        if (!fixturesSeeded) {
             return;
         }
         for (String sql : cleanupSql()) {
             adminJdbcTemplate.update(sql);
         }
+        fixturesSeeded = false;
     }
 
     @Test

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -79,6 +80,18 @@ class M4R1RetrievalRetirementReverseGuardIT extends AbstractRetirementReverseGua
                 "DELETE FROM rag_edition",
                 "DELETE FROM rag_source"
         };
+    }
+
+    /** 本批 cleanup 会 BYPASSRLS 全表删片段/向量；全局哨兵桶非空就跳过（G-7 同款保护）。 */
+    @Override
+    protected void guardRealGlobalChunks() {
+        Integer count = adminJdbcTemplate.queryForObject(
+                "SELECT count(*) FROM rag.rag_chunk WHERE tenant_id = rag.rag_global_tenant_id()",
+                Integer.class);
+        long globalChunksBefore = count == null ? 0 : count;
+        Assumptions.assumeTrue(globalChunksBefore == 0,
+                "skipped: 全局桶已有 " + globalChunksBefore
+                        + " 个真实片段，本批 cleanup() 会全表删片段/向量，宁可不跑");
     }
 
     @Override
